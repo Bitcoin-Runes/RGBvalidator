@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  validator:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - BITCOIN_RPC_HOST=bitcoin
+      - BITCOIN_RPC_PORT=18443
+      - BITCOIN_RPC_USER=user
+      - BITCOIN_RPC_PASSWORD=password
+      - SECRET_KEY=change-this-in-production
+    restart: unless-stopped
+
+  bitcoin:
+    image: ruimarinho/bitcoin-core:latest
+    command:
+      -regtest=1
+      -server=1
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0
+      -rpcauth=user:7eef41c84a7d4842c401f1b94a5transsalt$$
+      -fallbackfee=0.0002
+    ports:
+      - "18443:18443"
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    restart: unless-stopped
+
+volumes:
+  bitcoin_data: 

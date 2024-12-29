@@ -1,239 +1,244 @@
-# Token Validator Guide
+# Token Validator User Guide
 
-This guide explains how to use the Token Validator's CLI and API interfaces.
+## Table of Contents
 
-## Prerequisites
+1. [Installation](#installation)
+2. [Configuration](#configuration)
+3. [Network Support](#network-support)
+4. [Working with Wallets](#working-with-wallets)
+5. [Token Management](#token-management)
+6. [Backup and Recovery](#backup-and-recovery)
+7. [Troubleshooting](#troubleshooting)
 
-1. Python 3.8 or higher
-2. Access to a Bitcoin node (default: local node at 127.0.0.1:18443)
-3. Required Python packages (install via `pip install -r requirements.txt`)
+## Installation
+
+### Prerequisites
+
+- Python 3.11 or higher
+- Bitcoin Core node (optional for mainnet/testnet)
+- SQLite3 (included in Python)
+
+### Setup Steps
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/token-validator.git
+cd token-validator
+```
+
+2. Create virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Configuration
 
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
+### Environment Setup
 
-2. Update the `.env` file with your Bitcoin node credentials:
-   ```env
-   BITCOIN_RPC_HOST=127.0.0.1
-   BITCOIN_RPC_PORT=18443
-   BITCOIN_RPC_USER=your_rpc_username
-   BITCOIN_RPC_PASSWORD=your_rpc_password
-   ```
+Create a `.env` file with your network settings:
 
-## Using the CLI
+```env
+# Network Selection (mainnet, testnet, regtest)
+BITCOIN_NETWORK=testnet
 
-The CLI provides two main command groups: `wallet` and `token`.
+# Bitcoin RPC Configuration
+BITCOIN_RPC_HOST=localhost
+BITCOIN_RPC_PORT=18332  # Port varies by network
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
 
-### Wallet Management
-
-1. Create a new wallet:
-   ```bash
-   python -m validator wallet create my_wallet
-   ```
-
-2. Get wallet information:
-   ```bash
-   python -m validator wallet info my_wallet
-   ```
-
-3. List all wallets:
-   ```bash
-   python -m validator wallet list
-   ```
-
-4. Get a new wallet address:
-   ```bash
-   python -m validator wallet address my_wallet
-   ```
-
-5. List wallet UTXOs:
-   ```bash
-   python -m validator wallet utxos my_wallet
-   ```
-
-### Token Management
-
-1. Create a fungible token:
-   ```bash
-   python -m validator token create-fungible \
-       --name "My Token" \
-       --description "My first fungible token" \
-       --wallet-name my_wallet \
-       --txid abc123... \
-       --vout 0 \
-       --amount 1.0 \
-       --total-supply 1000000 \
-       --decimals 18
-   ```
-
-2. Create a non-fungible token:
-   ```bash
-   python -m validator token create-nft \
-       --name "My NFT" \
-       --description "My first NFT" \
-       --wallet-name my_wallet \
-       --txid abc123... \
-       --vout 0 \
-       --amount 1.0 \
-       --token-id "nft1" \
-       --metadata-uri "ipfs://..." \
-       --attributes-file metadata.json
-   ```
-
-3. Get token information:
-   ```bash
-   python -m validator token get abc123... 0
-   ```
-
-## Using the API
-
-The API server provides RESTful endpoints for all validator operations.
-
-### Starting the API Server
-
-```bash
-python -m validator serve
+# Application Settings
+APP_SECRET_KEY=your_secret_key
+DATABASE_URL=sqlite:///validator.db
 ```
 
-The server will start at `http://127.0.0.1:8000` by default.
+### Network-Specific Ports
 
-### API Endpoints
+- Mainnet: 8332
+- Testnet: 18332
+- Regtest: 18443
 
-#### Wallet Management
+## Network Support
 
-1. Create a new wallet:
-   ```bash
-   curl -X POST "http://localhost:8000/wallets" \
-       -H "Content-Type: application/json" \
-       -d '{"wallet_name": "my_wallet"}'
-   ```
+### Working with Mainnet
 
-2. Get wallet information:
-   ```bash
-   curl "http://localhost:8000/wallets/my_wallet"
-   ```
+```bash
+# Configure for mainnet
+export BITCOIN_NETWORK=mainnet
+export BITCOIN_RPC_PORT=8332
 
-3. Get wallet address:
-   ```bash
-   curl "http://localhost:8000/wallets/my_wallet/address"
-   ```
+# Create mainnet wallet
+python -m validator wallet create mainnet_wallet --network mainnet
 
-4. Get wallet UTXOs:
-   ```bash
-   curl "http://localhost:8000/wallets/my_wallet/utxos"
-   ```
+# Generate mainnet address
+python -m validator wallet address mainnet_wallet
+```
 
-#### Token Management
+### Working with Testnet
 
-1. Create a fungible token:
-   ```bash
-   curl -X POST "http://localhost:8000/tokens/fungible" \
-       -H "Content-Type: application/json" \
-       -d '{
-           "name": "My Token",
-           "description": "My first fungible token",
-           "token_type": "fungible",
-           "wallet_name": "my_wallet",
-           "utxo_ref": {
-               "txid": "abc123...",
-               "vout": 0,
-               "amount": 1.0
-           },
-           "total_supply": 1000000,
-           "decimals": 18
-       }'
-   ```
+```bash
+# Configure for testnet
+export BITCOIN_NETWORK=testnet
+export BITCOIN_RPC_PORT=18332
 
-2. Create a non-fungible token:
-   ```bash
-   curl -X POST "http://localhost:8000/tokens/non-fungible" \
-       -H "Content-Type: application/json" \
-       -d '{
-           "name": "My NFT",
-           "description": "My first NFT",
-           "token_type": "non_fungible",
-           "wallet_name": "my_wallet",
-           "utxo_ref": {
-               "txid": "abc123...",
-               "vout": 0,
-               "amount": 1.0
-           },
-           "token_id": "nft1",
-           "metadata_uri": "ipfs://..."
-       }'
-   ```
+# Create testnet wallet
+python -m validator wallet create testnet_wallet --network testnet
 
-3. Get token information:
-   ```bash
-   curl "http://localhost:8000/tokens/abc123.../0"
-   ```
+# Generate testnet address
+python -m validator wallet address testnet_wallet
+```
 
-## Working with Bitcoin Node
+### Working with Regtest
 
-1. After creating a wallet, get a new address using the `wallet address` command
-2. Send some BTC to the address using your Bitcoin node:
-   ```bash
-   bitcoin-cli -regtest sendtoaddress "your_wallet_address" 1.0
-   ```
-3. Wait for the transaction to be confirmed
-4. List the UTXOs using `wallet utxos` command
-5. Use the TXID and vout from the UTXO to create tokens
+```bash
+# Configure for regtest
+export BITCOIN_NETWORK=regtest
+export BITCOIN_RPC_PORT=18443
 
-## Common Workflows
+# Create regtest wallet
+python -m validator wallet create regtest_wallet --network regtest
 
-### Creating a Fungible Token
+# Generate regtest address
+python -m validator wallet address regtest_wallet
+```
 
-1. Create a wallet:
-   ```bash
-   python -m validator wallet create token_wallet
-   ```
+## Working with Wallets
 
-2. Get a deposit address:
-   ```bash
-   python -m validator wallet address token_wallet
-   ```
+### Wallet Commands
 
-3. Send BTC to the address and wait for confirmation
+1. Create Wallet:
+```bash
+python -m validator wallet create <name> [--network <network>]
+```
 
-4. List UTXOs:
-   ```bash
-   python -m validator wallet utxos token_wallet
-   ```
+2. List Wallets:
+```bash
+python -m validator wallet list
+```
 
-5. Create the token using a UTXO:
-   ```bash
-   python -m validator token create-fungible \
-       --name "My Token" \
-       --wallet-name token_wallet \
-       --txid <from_utxos> \
-       --vout <from_utxos> \
-       --amount <from_utxos> \
-       --total-supply 1000000
-   ```
+3. Generate Address:
+```bash
+python -m validator wallet address <name>
+```
 
-### Creating an NFT Collection
+4. Get Balance:
+```bash
+python -m validator wallet balance <name>
+```
 
-1. Prepare metadata JSON file (e.g., `metadata.json`):
-   ```json
-   {
-       "attributes": [
-           {"trait_type": "Color", "value": "Blue"},
-           {"trait_type": "Size", "value": "Large"}
-       ]
-   }
-   ```
+5. Export Wallet:
+```bash
+python -m validator wallet export <name> <path>
+```
 
-2. Create the NFT:
-   ```bash
-   python -m validator token create-nft \
-       --name "My NFT" \
-       --wallet-name token_wallet \
-       --txid <from_utxos> \
-       --vout <from_utxos> \
-       --amount <from_utxos> \
-       --token-id "nft1" \
-       --attributes-file metadata.json
-   ``` 
+6. Import Wallet:
+```bash
+python -m validator wallet import <path>
+```
+
+### Network-Specific Features
+
+- Each wallet is network-aware
+- Addresses are automatically formatted for the correct network
+- Separate storage for each network's wallets
+- Network-specific backup files
+
+## Token Management
+
+### Token Commands
+
+1. Create Token:
+```bash
+python -m validator token create <name> <supply> [--decimals <decimals>] [--network <network>]
+```
+
+2. List Tokens:
+```bash
+python -m validator token list [--network <network>]
+```
+
+3. Transfer Token:
+```bash
+python -m validator token transfer <token_id> <recipient> <amount>
+```
+
+4. Get Token Info:
+```bash
+python -m validator token info <token_id>
+```
+
+### Network Considerations
+
+- Tokens are bound to their creation network
+- Cross-network transfers are not supported
+- Each network maintains its own token registry
+
+## Backup and Recovery
+
+### Backup Commands
+
+1. Create Backup:
+```bash
+python -m validator backup create [--network <network>]
+```
+
+2. List Backups:
+```bash
+python -m validator backup list
+```
+
+3. Restore from Backup:
+```bash
+python -m validator backup restore <backup_id>
+```
+
+### Network-Specific Backups
+
+- Separate backup files for each network
+- Network information included in backup metadata
+- Restore validates network compatibility
+
+## Troubleshooting
+
+### Common Issues
+
+1. Network Connection:
+```bash
+# Test network connection
+python -m validator network test
+```
+
+2. Address Validation:
+```bash
+# Validate address format
+python -m validator wallet validate <address>
+```
+
+3. Network Status:
+```bash
+# Check network status
+python -m validator network status
+```
+
+### Network-Specific Problems
+
+1. Mainnet Issues:
+- Check Bitcoin Core sync status
+- Verify RPC credentials
+- Confirm network port (8332)
+
+2. Testnet Issues:
+- Ensure testnet node is running
+- Check testnet port (18332)
+- Verify testnet faucet access
+
+3. Regtest Issues:
+- Confirm regtest mode is active
+- Check regtest port (18443)
+- Verify block generation 

@@ -6,67 +6,57 @@ from .config import get_settings
 settings = get_settings()
 
 class BitcoinClient:
+    """Bitcoin node client for transaction operations only.
+    This client does not handle wallet operations, which are managed by our own wallet implementation."""
+    
     def __init__(self):
         self.rpc_connection = self._get_rpc_connection()
     
-    def _get_rpc_connection(self) -> AuthServiceProxy:
-        """Create a connection to the Bitcoin node"""
-        rpc_url = f"http://{settings.BITCOIN_RPC_USER}:{settings.BITCOIN_RPC_PASSWORD}@{settings.BITCOIN_RPC_HOST}:{settings.BITCOIN_RPC_PORT}"
+    def _get_rpc_connection(self):
+        """Get RPC connection to Bitcoin node"""
+        rpc_url = f"http://{settings.bitcoin_rpc_user}:{settings.bitcoin_rpc_password}@{settings.bitcoin_rpc_host}:{settings.bitcoin_rpc_port}"
         return AuthServiceProxy(rpc_url)
     
-    def create_wallet(self, wallet_name: str) -> Dict:
-        """Create a new wallet"""
+    def broadcast_transaction(self, raw_tx: str) -> str:
+        """Broadcast a raw transaction to the network"""
         try:
-            result = self.rpc_connection.createwallet(wallet_name)
-            if result.get('name') == wallet_name:
-                # Load the wallet
-                self.rpc_connection.loadwallet(wallet_name)
-                # Generate a new address
-                address = self.rpc_connection.getnewaddress()
-                return {
-                    "wallet_name": wallet_name,
-                    "address": address,
-                    "status": "created"
-                }
+            txid = self.rpc_connection.sendrawtransaction(raw_tx)
+            return txid
         except Exception as e:
-            logging.error(f"Error creating wallet: {str(e)}")
-            raise Exception(f"Failed to create wallet: {str(e)}")
+            logging.error(f"Error broadcasting transaction: {str(e)}")
+            raise Exception(f"Failed to broadcast transaction: {str(e)}")
     
-    def get_wallet_balance(self, wallet_name: str) -> float:
-        """Get wallet balance"""
+    def get_transaction(self, txid: str) -> Dict:
+        """Get transaction details"""
         try:
-            self.rpc_connection.loadwallet(wallet_name)
-            return self.rpc_connection.getbalance()
+            return self.rpc_connection.getrawtransaction(txid, True)
         except Exception as e:
-            logging.error(f"Error getting balance: {str(e)}")
-            raise Exception(f"Failed to get wallet balance: {str(e)}")
+            logging.error(f"Error getting transaction: {str(e)}")
+            raise Exception(f"Failed to get transaction: {str(e)}")
     
-    def get_utxos(self, wallet_name: str) -> List[Dict]:
-        """Get list of UTXOs for a wallet"""
+    def get_utxo(self, txid: str, vout: int) -> Optional[Dict]:
+        """Get UTXO details if it exists and is unspent"""
         try:
-            self.rpc_connection.loadwallet(wallet_name)
-            return self.rpc_connection.listunspent()
+            return self.rpc_connection.gettxout(txid, vout)
         except Exception as e:
-            logging.error(f"Error getting UTXOs: {str(e)}")
-            raise Exception(f"Failed to get UTXOs: {str(e)}")
+            logging.error(f"Error getting UTXO: {str(e)}")
+            return None
     
-    def verify_utxo(self, txid: str, vout: int) -> bool:
-        """Verify if a UTXO exists and is unspent"""
+    def get_network_info(self) -> Dict:
+        """Get current network information"""
         try:
-            utxo = self.rpc_connection.gettxout(txid, vout)
-            return utxo is not None
+            return self.rpc_connection.getnetworkinfo()
         except Exception as e:
-            logging.error(f"Error verifying UTXO: {str(e)}")
-            return False
+            logging.error(f"Error getting network info: {str(e)}")
+            raise Exception(f"Failed to get network info: {str(e)}")
     
-    def get_wallet_address(self, wallet_name: str) -> str:
-        """Get a new address for the wallet"""
+    def get_block_height(self) -> int:
+        """Get current block height"""
         try:
-            self.rpc_connection.loadwallet(wallet_name)
-            return self.rpc_connection.getnewaddress()
+            return self.rpc_connection.getblockcount()
         except Exception as e:
-            logging.error(f"Error getting address: {str(e)}")
-            raise Exception(f"Failed to get wallet address: {str(e)}")
+            logging.error(f"Error getting block height: {str(e)}")
+            raise Exception(f"Failed to get block height: {str(e)}")
 
 # Create a global instance
 bitcoin_client = BitcoinClient() 

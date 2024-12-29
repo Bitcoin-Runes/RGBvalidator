@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Wallets - Token Validator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .wallet-card {
+        margin-bottom: 1rem;
+    }
+    .utxo-list {
+        max-height: 200px;
+        overflow-y: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Wallets</h2>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createWalletModal">
+            Create Wallet
+        </button>
+    </div>
+
+    <div class="row">
+        {% for wallet in wallets %}
+        <div class="col-md-6 col-lg-4">
+            <div class="card wallet-card">
+                <div class="card-body">
+                    <h5 class="card-title">{{ wallet.wallet_name }}</h5>
+                    <p class="card-text">
+                        <strong>Address:</strong> <span class="text-monospace">{{ wallet.address }}</span><br>
+                        <strong>Balance:</strong> {{ wallet.balance }} BTC
+                    </p>
+                    <button class="btn btn-sm btn-outline-primary me-2" onclick="getNewAddress('{{ wallet.wallet_name }}')">
+                        Get New Address
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="showUTXOs('{{ wallet.wallet_name }}')">
+                        View UTXOs
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Create Wallet Modal -->
+<div class="modal fade" id="createWalletModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Wallet</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="createWalletForm">
+                    <div class="mb-3">
+                        <label for="walletName" class="form-label">Wallet Name</label>
+                        <input type="text" class="form-control" id="walletName" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="createWallet()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- UTXOs Modal -->
+<div class="modal fade" id="utxosModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">UTXOs</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="utxo-list">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>TXID</th>
+                                <th>VOUT</th>
+                                <th>Amount (BTC)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="utxoTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function createWallet() {
+    const walletName = document.getElementById('walletName').value;
+    try {
+        const response = await fetch('/wallets/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `wallet_name=${encodeURIComponent(walletName)}`
+        });
+        
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const data = await response.json();
+            alert(`Error: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+
+async function getNewAddress(walletName) {
+    try {
+        const response = await fetch(`/wallets/${walletName}/address`);
+        const data = await response.json();
+        
+        if (response.ok) {
+            alert(`New address: ${data.address}`);
+        } else {
+            alert(`Error: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+
+async function showUTXOs(walletName) {
+    try {
+        const response = await fetch(`/wallets/${walletName}/utxos`);
+        const utxos = await response.json();
+        
+        const tbody = document.getElementById('utxoTableBody');
+        tbody.innerHTML = '';
+        
+        utxos.forEach(utxo => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="text-monospace">${utxo.txid}</td>
+                <td>${utxo.vout}</td>
+                <td>${utxo.amount}</td>
+            `;
+            tbody.appendChild(row);
+        });
+        
+        new bootstrap.Modal(document.getElementById('utxosModal')).show();
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+</script>
+{% endblock %} 

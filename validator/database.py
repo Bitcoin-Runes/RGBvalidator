@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Union, List, Optional
+from urllib.parse import urlparse
 
 from .models import FungibleToken, NonFungibleToken, WalletInfo
 from .config import get_settings
@@ -10,8 +11,18 @@ from .config import get_settings
 settings = get_settings()
 
 class Database:
-    def __init__(self, db_path: str = settings.DATABASE_URL):
-        self.db_path = db_path
+    def __init__(self, db_url: str = settings.database_url):
+        # Parse the SQLite URL to get the database path
+        parsed = urlparse(db_url)
+        self.db_path = parsed.path.lstrip('/')  # Remove leading slash
+        if not self.db_path:
+            self.db_path = 'validator.db'  # Default database name
+        
+        # Ensure the directory exists
+        db_dir = Path(self.db_path).parent
+        if not db_dir.exists():
+            db_dir.mkdir(parents=True)
+            
         self._init_db()
 
     def _init_db(self):

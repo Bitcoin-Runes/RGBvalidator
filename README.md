@@ -1,94 +1,165 @@
-# Token Validator
+# RGB Validator
 
-A Python-based token validation system that uses Bitcoin UTXOs for token creation and verification. This system allows you to create and manage both fungible and non-fungible tokens (NFTs) backed by Bitcoin UTXOs.
+A robust RGB validation software with multi-network Bitcoin support.
 
 ## Features
 
-- **Bitcoin Integration**: Direct integration with Bitcoin node for UTXO verification
-- **Wallet Management**: Create and manage Bitcoin wallets
-- **Token Types**:
-  - Fungible Tokens (FT)
-  - Non-Fungible Tokens (NFT)
-- **Multiple Interfaces**:
-  - CLI interface with rich formatting
-  - RESTful API with FastAPI
-- **UTXO Verification**: Ensures tokens are backed by valid Bitcoin UTXOs
-- **Local Database**: SQLite storage for token and wallet data
-- **Metadata Support**: Rich metadata support for NFTs
-
-## Requirements
-
-- Python 3.8 or higher
-- Bitcoin Core node (local or remote)
-- SQLite 3
+- **Multi-Network Support**:
+  - Mainnet for production use
+  - Testnet for integration testing
+  - Regtest for local development
+  
+- **HD Wallet Management**:
+  - BIP44 compliant wallet generation
+  - Network-specific address derivation
+  - Secure key storage and encryption
+  
+- **Token Operations**:
+  - Create and manage fungible tokens
+  - Network-aware token transfers
+  - UTXO validation and tracking
+  
+- **Security**:
+  - Encrypted wallet storage
+  - Network isolation
+  - Secure key management
 
 ## Quick Start
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/validator.git
-   cd validator
-   ```
+### Installation
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/anoncodemonkey/RGBvalidator.git
+cd token-validator
 
-3. Configure Bitcoin node connection:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your Bitcoin node credentials
-   ```
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-4. Start the API server:
-   ```bash
-   python -m validator serve
-   ```
+# Install dependencies
+pip install -r requirements.txt
+```
 
-5. Or use the CLI:
-   ```bash
-   python -m validator wallet create my_wallet
-   ```
+### Configuration
+
+Create a `.env` file:
+```env
+# Choose network: mainnet, testnet, or regtest
+BITCOIN_NETWORK=testnet
+
+# Bitcoin RPC settings (ports: mainnet=8332, testnet=18332, regtest=18443)
+BITCOIN_RPC_HOST=localhost
+BITCOIN_RPC_PORT=18332
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
+```
+
+### Basic Usage
+
+1. Create a wallet:
+```bash
+# Create wallet for default network
+python -m validator wallet create mywallet
+
+# Or specify network
+python -m validator wallet create mywallet --network testnet
+```
+
+2. Generate addresses:
+```bash
+python -m validator wallet address mywallet
+```
+
+3. List wallets:
+```bash
+python -m validator wallet list
+```
+
+## Network Support
+
+### Mainnet
+- Production network
+- Real bitcoin transactions
+- Addresses start with '1'
+- Uses BIP44 coin type 0
+
+### Testnet
+- Test network
+- Free test bitcoins
+- Addresses start with 'm' or 'n'
+- Uses BIP44 coin type 1
+
+### Regtest
+- Local testing network
+- Instant block generation
+- Same address format as testnet
+- Perfect for development
+
+## Development Setup
+
+1. Start with Regtest:
+```bash
+# Configure for regtest
+BITCOIN_NETWORK=regtest
+BITCOIN_RPC_PORT=18443
+
+# Create test wallet
+python -m validator wallet create test --network regtest
+```
+
+2. Move to Testnet:
+```bash
+# Configure for testnet
+BITCOIN_NETWORK=testnet
+BITCOIN_RPC_PORT=18332
+
+# Create testnet wallet
+python -m validator wallet create test --network testnet
+```
+
+3. Production on Mainnet:
+```bash
+# Configure for mainnet
+BITCOIN_NETWORK=mainnet
+BITCOIN_RPC_PORT=8332
+
+# Create mainnet wallet
+python -m validator wallet create prod --network mainnet
+```
+
+## Security Considerations
+
+1. Network Isolation
+   - Keep separate wallets for each network
+   - Never mix testnet and mainnet addresses
+   - Use network-specific backups
+
+2. Production Use
+   - Always verify network settings
+   - Double-check address formats
+   - Use strong encryption passwords
+
+3. Development
+   - Start with regtest/testnet
+   - Test all features before mainnet
+   - Use proper error handling
 
 ## Documentation
 
-- [User Guide](GUIDE.md) - Detailed instructions for using the validator
-- [API Documentation](http://localhost:8000/docs) - Interactive API documentation (available when server is running)
-
-## Project Structure
-
-```
-validator/
-├── __init__.py
-├── __main__.py
-├── api.py          # FastAPI implementation
-├── cli.py          # CLI implementation
-├── models.py       # Data models
-├── database.py     # Database operations
-├── bitcoin_client.py # Bitcoin node interface
-└── config.py       # Configuration management
-```
-
-## Development Status
-
-See [Project Status](ai/project-update.md) for current development status and roadmap.
+- [Installation Guide](GUIDE.md#installation)
+- [Configuration Guide](GUIDE.md#configuration)
+- [Network Setup](GUIDE.md#network-support)
+- [Wallet Management](GUIDE.md#working-with-wallets)
+- [Token Operations](GUIDE.md#token-management)
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Test on regtest/testnet first
+4. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Bitcoin Core for the reference implementation
-- FastAPI for the modern web framework
-- Typer for the CLI interface
-- Rich for beautiful terminal formatting
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
