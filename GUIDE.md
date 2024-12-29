@@ -6,9 +6,11 @@
 2. [Configuration](#configuration)
 3. [Network Support](#network-support)
 4. [Working with Wallets](#working-with-wallets)
-5. [Token Management](#token-management)
-6. [Backup and Recovery](#backup-and-recovery)
-7. [Troubleshooting](#troubleshooting)
+5. [Transaction Management](#transaction-management)
+6. [UTXO Management](#utxo-management)
+7. [Token Management](#token-management)
+8. [Backup and Recovery](#backup-and-recovery)
+9. [Troubleshooting](#troubleshooting)
 
 ## Installation
 
@@ -114,7 +116,7 @@ python -m validator wallet address regtest_wallet
 
 1. Create Wallet:
 ```bash
-python -m validator wallet create <name> [--network <network>]
+python -m validator wallet create <name> [--network <network>] [--type <address_type>]
 ```
 
 2. List Wallets:
@@ -124,7 +126,7 @@ python -m validator wallet list
 
 3. Generate Address:
 ```bash
-python -m validator wallet address <name>
+python -m validator wallet generate <name> [--count <number>]
 ```
 
 4. Get Balance:
@@ -132,12 +134,17 @@ python -m validator wallet address <name>
 python -m validator wallet balance <name>
 ```
 
-5. Export Wallet:
+5. View Network Info:
+```bash
+python -m validator wallet network <name>
+```
+
+6. Export Wallet:
 ```bash
 python -m validator wallet export <name> <path>
 ```
 
-6. Import Wallet:
+7. Import Wallet:
 ```bash
 python -m validator wallet import <path>
 ```
@@ -148,6 +155,74 @@ python -m validator wallet import <path>
 - Addresses are automatically formatted for the correct network
 - Separate storage for each network's wallets
 - Network-specific backup files
+
+## Transaction Management
+
+### Sending Bitcoin
+
+1. Basic Send:
+```bash
+python -m validator wallet send <wallet_name> <recipient_address> <amount>
+```
+
+2. Send with Custom Fee Rate:
+```bash
+python -m validator wallet send <wallet_name> <recipient_address> <amount> --fee-rate <sat/vB>
+```
+
+3. Send with Memo:
+```bash
+python -m validator wallet send <wallet_name> <recipient_address> <amount> --memo "Payment description"
+```
+
+### Fee Rate Guidelines
+
+- **Regtest**: Default 5 sat/vB
+- **Testnet/Mainnet**: Dynamic fee estimation
+- Custom fee rates: 1-100 sat/vB recommended
+
+### Transaction Features
+
+- Automatic UTXO selection
+- Change address generation
+- Memo support
+- Custom fee rates
+- Transaction tracking
+
+## UTXO Management
+
+### Freezing UTXOs
+
+1. Create and Freeze UTXO:
+```bash
+python -m validator wallet freeze-utxo <wallet_name> <amount> [--memo "Purpose of freeze"]
+```
+
+2. View Frozen UTXOs:
+```bash
+python -m validator wallet balance <wallet_name>
+# Shows both available and frozen UTXOs
+```
+
+### UTXO Features
+
+- Create specific value UTXOs
+- Freeze UTXOs to prevent spending
+- Add memos for tracking
+- Automatic UTXO tracking
+- Balance segregation (available vs frozen)
+
+### Best Practices
+
+1. UTXO Creation:
+   - Use meaningful memos
+   - Consider fee implications
+   - Plan UTXO values carefully
+
+2. UTXO Management:
+   - Regular balance checks
+   - Document frozen UTXOs
+   - Monitor UTXO states
 
 ## Token Management
 

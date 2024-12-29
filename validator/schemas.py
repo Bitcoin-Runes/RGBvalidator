@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from decimal import Decimal
 
 class TokenSchemaVersion(str, Enum):
     V1 = "1.0.0"
@@ -58,6 +59,32 @@ class TokenBurnSchema(BaseModel):
     amount: int = Field(..., gt=0, description="Amount to burn (1 for NFTs)")
     utxo: Dict[str, Any] = Field(..., description="UTXO reference for burn validation")
     signature: str = Field(..., description="Signature of the burn data")
+
+class UTXO(BaseModel):
+    txid: str
+    vout: int
+    amount: Decimal
+    address: str
+    frozen: bool = False
+    memo: Optional[str] = None
+    wallet_name: str
+
+class Transaction(BaseModel):
+    txid: str
+    timestamp: int
+    amount: Decimal
+    fee: Decimal
+    memo: Optional[str]
+    from_addresses: List[str]
+    to_addresses: List[str]
+    wallet_name: str
+    change_address: Optional[str]
+    status: str  # 'pending', 'confirmed', 'failed'
+
+class WalletInfo(BaseModel):
+    wallet_name: str
+    address: str
+    balance: Decimal
 
 def validate_token_schema(token_data: Dict[str, Any], token_type: str) -> bool:
     """

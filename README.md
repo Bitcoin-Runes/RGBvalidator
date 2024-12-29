@@ -22,6 +22,20 @@ A robust RGB validation software with advanced Bitcoin smart contract support an
   - Secure key storage and encryption
   - Multiple address generation
 
+- **Transaction Management**:
+  - Send bitcoin with custom fee rates
+  - Add memos to transactions
+  - UTXO tracking and management
+  - Freeze specific UTXOs
+  - Custom fee rate support (sat/vB)
+
+### UTXO Management
+- **Freezing Capabilities**:
+  - Create and freeze specific UTXOs
+  - Add memos to frozen UTXOs
+  - Track frozen UTXOs separately
+  - Prevent spending of frozen UTXOs
+
 ### Smart Contract Support
 - **Taproot Capabilities**:
   - MAST (Merkelized Alternative Script Trees)
@@ -98,10 +112,28 @@ python -m validator wallet create legacy_wallet --type legacy --network mainnet
 python -m validator wallet generate wallet_name
 
 # Generate multiple addresses
-python -m validator wallet generate-batch wallet_name --count 5
+python -m validator wallet generate wallet_name --count 5
 ```
 
-3. View wallet information:
+3. Send Bitcoin:
+```bash
+# Send with default fee rate (5 sat/vB for regtest)
+python -m validator wallet send wallet_name recipient_address 0.1
+
+# Send with custom fee rate and memo
+python -m validator wallet send wallet_name recipient_address 0.1 --fee-rate 10 --memo "Payment for services"
+```
+
+4. Manage UTXOs:
+```bash
+# Create and freeze a UTXO
+python -m validator wallet freeze-utxo wallet_name 0.1 --memo "Reserved for special purpose"
+
+# Check wallet balance (includes frozen UTXOs)
+python -m validator wallet balance wallet_name
+```
+
+5. View wallet information:
 ```bash
 # List all wallets
 python -m validator wallet list
@@ -110,7 +142,7 @@ python -m validator wallet list
 python -m validator wallet info wallet_name
 
 # View network-specific addresses
-python -m validator wallet addresses wallet_name
+python -m validator wallet network wallet_name
 ```
 
 ## Network-Specific Features
@@ -118,6 +150,7 @@ python -m validator wallet addresses wallet_name
 ### Regtest (Local Development)
 - Use with Polar for testing
 - Instant block generation
+- Default fee rate: 5 sat/vB
 - Address formats:
   * Taproot: bcrt1p...
   * SegWit: bcrt1q...
@@ -126,6 +159,7 @@ python -m validator wallet addresses wallet_name
 
 ### Testnet (Testing)
 - Free test bitcoins
+- Dynamic fee estimation
 - Address formats:
   * Taproot: tb1p...
   * SegWit: tb1q...
@@ -135,6 +169,7 @@ python -m validator wallet addresses wallet_name
 
 ### Mainnet (Production)
 - Real bitcoin transactions
+- Dynamic fee estimation
 - Address formats:
   * Taproot: bc1p...
   * SegWit: bc1q...

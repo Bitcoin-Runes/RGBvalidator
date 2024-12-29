@@ -1,6 +1,6 @@
 venv
 .env
 ai
-data
+data/
 tokens.db
 validator/__pycache__
