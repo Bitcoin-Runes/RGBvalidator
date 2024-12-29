@@ -1,28 +1,51 @@
 # RGB Validator
 
-A robust RGB validation software with multi-network Bitcoin support.
+A robust RGB validation software with advanced Bitcoin smart contract support and multi-network capabilities.
 
 ## Features
 
-- **Multi-Network Support**:
-  - Mainnet for production use
-  - Testnet for integration testing
-  - Regtest for local development
-  
-- **HD Wallet Management**:
-  - BIP44 compliant wallet generation
-  - Network-specific address derivation
+### Multi-Network Support
+- **Mainnet**: Production network (real BTC)
+- **Testnet**: Testing network (test BTC)
+- **Regtest**: Local development with Polar
+
+### Advanced Wallet Management
+- **Multiple Address Types**:
+  - Taproot (P2TR): Enhanced privacy and smart contracts
+  - Native SegWit (P2WPKH): Efficient transactions
+  - Nested SegWit (P2SH-P2WPKH): Backward compatibility
+  - Legacy (P2PKH): Maximum compatibility
+
+- **HD Wallet Features**:
+  - BIP44/49/84/86 compliant
+  - Network-specific derivation paths
   - Secure key storage and encryption
-  
-- **Token Operations**:
-  - Create and manage fungible tokens
-  - Network-aware token transfers
-  - UTXO validation and tracking
-  
-- **Security**:
-  - Encrypted wallet storage
-  - Network isolation
-  - Secure key management
+  - Multiple address generation
+
+### Smart Contract Support
+- **Taproot Capabilities**:
+  - MAST (Merkelized Alternative Script Trees)
+  - Schnorr signatures
+  - Complex script conditions
+  - Enhanced privacy features
+
+- **Contract Types**:
+  - Time-locked contracts
+  - Multi-signature wallets
+  - Atomic swaps
+  - Hash Time Locked Contracts (HTLCs)
+
+### Token Operations
+- Create and manage fungible tokens
+- Network-aware token transfers
+- UTXO validation and tracking
+- Atomic swap support
+
+### Security Features
+- Encrypted wallet storage
+- Network isolation
+- Secure key management
+- Address validation
 
 ## Quick Start
 
@@ -46,120 +69,136 @@ pip install -r requirements.txt
 Create a `.env` file:
 ```env
 # Choose network: mainnet, testnet, or regtest
-BITCOIN_NETWORK=testnet
+BITCOIN_NETWORK=regtest  # Default for development
 
-# Bitcoin RPC settings (ports: mainnet=8332, testnet=18332, regtest=18443)
+# Bitcoin RPC settings
 BITCOIN_RPC_HOST=localhost
-BITCOIN_RPC_PORT=18332
+BITCOIN_RPC_PORT=18443  # Regtest default
 BITCOIN_RPC_USER=your_username
 BITCOIN_RPC_PASSWORD=your_password
 ```
 
-### Basic Usage
+### Wallet Management
 
-1. Create a wallet:
+1. Create wallets for different networks:
 ```bash
-# Create wallet for default network
-python -m validator wallet create mywallet
+# Create Taproot wallet (recommended for new projects)
+python -m validator wallet create taproot_wallet --type taproot --network regtest
 
-# Or specify network
-python -m validator wallet create mywallet --network testnet
+# Create SegWit wallet
+python -m validator wallet create segwit_wallet --type segwit --network testnet
+
+# Create Legacy wallet
+python -m validator wallet create legacy_wallet --type legacy --network mainnet
 ```
 
 2. Generate addresses:
 ```bash
-python -m validator wallet address mywallet
+# Generate single address
+python -m validator wallet generate wallet_name
+
+# Generate multiple addresses
+python -m validator wallet generate-batch wallet_name --count 5
 ```
 
-3. List wallets:
+3. View wallet information:
 ```bash
+# List all wallets
 python -m validator wallet list
+
+# View specific wallet details
+python -m validator wallet info wallet_name
+
+# View network-specific addresses
+python -m validator wallet addresses wallet_name
 ```
 
-## Network Support
+## Network-Specific Features
 
-### Mainnet
-- Production network
-- Real bitcoin transactions
-- Addresses start with '1'
-- Uses BIP44 coin type 0
-
-### Testnet
-- Test network
-- Free test bitcoins
-- Addresses start with 'm' or 'n'
-- Uses BIP44 coin type 1
-
-### Regtest
-- Local testing network
+### Regtest (Local Development)
+- Use with Polar for testing
 - Instant block generation
-- Same address format as testnet
-- Perfect for development
+- Address formats:
+  * Taproot: bcrt1p...
+  * SegWit: bcrt1q...
+  * Nested SegWit: 2...
+  * Legacy: m/n...
 
-## Development Setup
+### Testnet (Testing)
+- Free test bitcoins
+- Address formats:
+  * Taproot: tb1p...
+  * SegWit: tb1q...
+  * Nested SegWit: 2...
+  * Legacy: m/n...
+- Faucet: https://testnet-faucet.mempool.co/
 
-1. Start with Regtest:
-```bash
-# Configure for regtest
-BITCOIN_NETWORK=regtest
-BITCOIN_RPC_PORT=18443
+### Mainnet (Production)
+- Real bitcoin transactions
+- Address formats:
+  * Taproot: bc1p...
+  * SegWit: bc1q...
+  * Nested SegWit: 3...
+  * Legacy: 1...
 
-# Create test wallet
-python -m validator wallet create test --network regtest
+## Smart Contract Development
+
+### Taproot Contracts
+```python
+# Example Timelock Contract
+{
+  "contract_type": "timelock",
+  "unlock_time": "2024-12-31T23:59:59Z",
+  "conditions": {
+    "before_timeout": ["pubkey_A"],
+    "after_timeout": ["pubkey_B"]
+  }
+}
 ```
 
-2. Move to Testnet:
-```bash
-# Configure for testnet
-BITCOIN_NETWORK=testnet
-BITCOIN_RPC_PORT=18332
-
-# Create testnet wallet
-python -m validator wallet create test --network testnet
+### Atomic Swaps
+```python
+# Example Token Swap
+{
+  "contract_type": "atomic_swap",
+  "asset_offered": {"type": "bitcoin", "amount": 1.0},
+  "asset_requested": {"type": "token", "amount": 1000},
+  "timeout": 24  # hours
+}
 ```
 
-3. Production on Mainnet:
-```bash
-# Configure for mainnet
-BITCOIN_NETWORK=mainnet
-BITCOIN_RPC_PORT=8332
-
-# Create mainnet wallet
-python -m validator wallet create prod --network mainnet
-```
-
-## Security Considerations
+## Security Best Practices
 
 1. Network Isolation
-   - Keep separate wallets for each network
-   - Never mix testnet and mainnet addresses
+   - Use separate wallets for each network
+   - Verify address formats before sending
    - Use network-specific backups
 
-2. Production Use
-   - Always verify network settings
-   - Double-check address formats
-   - Use strong encryption passwords
+2. Development Workflow
+   - Start with regtest/Polar
+   - Move to testnet for integration
+   - Thorough testing before mainnet
 
-3. Development
-   - Start with regtest/testnet
-   - Test all features before mainnet
-   - Use proper error handling
+3. Production Safeguards
+   - Double-check network settings
+   - Verify address formats
+   - Use strong encryption
+   - Keep secure backups
 
 ## Documentation
 
-- [Installation Guide](GUIDE.md#installation)
-- [Configuration Guide](GUIDE.md#configuration)
-- [Network Setup](GUIDE.md#network-support)
-- [Wallet Management](GUIDE.md#working-with-wallets)
-- [Token Operations](GUIDE.md#token-management)
+- [User Guide](GUIDE.md)
+- [Smart Contract Guide](CONTRACTS.md)
+- [Network Setup](NETWORKS.md)
+- [Token Management](TOKENS.md)
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Test on regtest/testnet first
+3. Test thoroughly on regtest/testnet
 4. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file

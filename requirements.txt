@@ -11,4 +11,5 @@ uvicorn>=0.15.0
 flask>=2.0.0
 sqlalchemy>=1.4.0
 aiofiles>=0.8.0
-python-multipart>=0.0.5 
+python-multipart>=0.0.5
+typing_extensions>=4.7.0 

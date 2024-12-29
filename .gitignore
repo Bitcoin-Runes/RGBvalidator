@@ -2,3 +2,5 @@ venv
 .env
 ai
 data
+tokens.db
+validator/__pycache__
