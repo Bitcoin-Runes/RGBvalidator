@@ -1665,8 +1665,8 @@ class WalletManager:
             logging.error(f"Error getting UTXOs: {str(e)}")
             return []
 
-    def consolidate_utxos(self, name: str, fee_rate: float = 5.0) -> Optional[str]:
-        """Consolidate all unfrozen UTXOs into a single UTXO"""
+    def consolidate_utxos(self, name: str, fee_rate: float = 5.0, batch_size: int = 50) -> Optional[str]:
+        """Consolidate unfrozen UTXOs into a single UTXO, processing in batches if needed"""
         try:
             name = self._validate_wallet_name(name)
             wallet_data = self._load_wallet(name)
@@ -1674,7 +1674,7 @@ class WalletManager:
                 raise ValueError(f"Wallet '{name}' not found")
 
             # Get all unfrozen UTXOs
-            all_utxos = self.get_utxos(name, include_frozen=True)  # Get all UTXOs to check frozen status
+            all_utxos = self.get_utxos(name, include_frozen=True)
             if not all_utxos:
                 raise ValueError("No UTXOs available")
 
@@ -1691,9 +1691,12 @@ class WalletManager:
             if len(utxos) < 2:
                 raise ValueError("Need at least 2 unfrozen UTXOs to consolidate")
 
-            logging.info(f"Consolidating {len(utxos)} unfrozen UTXOs")
-            for utxo in utxos:
-                logging.info(f"Including UTXO: {utxo.txid}:{utxo.vout} ({utxo.amount} BTC) at address {utxo.address}")
+            # Sort UTXOs by amount in descending order
+            utxos.sort(key=lambda x: x.amount, reverse=True)
+            
+            # Take only batch_size UTXOs
+            utxos = utxos[:batch_size]
+            logging.info(f"Processing batch of {len(utxos)} UTXOs")
 
             network = wallet_data.get("network", "mainnet")
             address_type = wallet_data.get("address_type", "legacy")
@@ -1728,10 +1731,8 @@ class WalletManager:
                 })
                 input_addresses.append(utxo.address)
 
-            # Estimate transaction size (simplified)
+            # Estimate transaction size and fee
             estimated_size = (len(inputs) * 180) + 34 + 10  # inputs + 1 output + overhead
-            
-            # Calculate fee
             fee = Decimal(str(estimated_size * fee_rate)) / Decimal('100000000')
             logging.info(f"Estimated fee: {fee} BTC (size: {estimated_size} bytes, rate: {fee_rate} sat/vB)")
             
@@ -1771,6 +1772,7 @@ class WalletManager:
                 indices = address_indices[addr]
                 logging.info(f"Found {len(indices)} possible indices for address {addr}")
                 
+                key_found = False
                 # Try each possible derivation path
                 for idx in indices:
                     path = self._get_derivation_path(network, address_type, idx)
@@ -1781,23 +1783,23 @@ class WalletManager:
                     hd_wallet.from_path(path)
                     private_key_hex = hd_wallet.private_key()
                     private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
-                    wif = private_key.to_wif()
                     
                     # Verify this private key corresponds to the address
                     pubkey = private_key.get_public_key()
                     derived_addr = pubkey.get_address().to_string()
                     
                     if derived_addr == addr:
+                        wif = private_key.to_wif()
                         private_keys.append(wif)
                         logging.info(f"Found matching private key for address {addr} at path {path}")
+                        key_found = True
                         break
-                    else:
-                        logging.info(f"Path {path} did not match address {addr}")
+                
+                if not key_found:
+                    raise ValueError(f"Could not find private key for address {addr}")
 
             if len(private_keys) != len(input_addresses):
                 raise ValueError(f"Could not find all private keys. Found {len(private_keys)} of {len(input_addresses)} required keys")
-
-            logging.info(f"Generated {len(private_keys)} private keys for {len(input_addresses)} input addresses")
 
             # Sign transaction
             signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
@@ -1807,7 +1809,6 @@ class WalletManager:
                 logging.error(f"Input addresses: {input_addresses}")
                 logging.error(f"Wallet addresses: {wallet_data['addresses']}")
                 
-                # Get more detailed error information
                 if "errors" in signed_tx:
                     for error in signed_tx["errors"]:
                         logging.error(f"Signing error: {json.dumps(error, indent=2)}")
@@ -1818,7 +1819,7 @@ class WalletManager:
             txid = rpc_connection.sendrawtransaction(signed_tx["hex"])
             logging.info(f"Consolidation transaction sent: {txid}")
 
-            # Update UTXO tracking - only remove the unfrozen UTXOs that were consolidated
+            # Update UTXO tracking - remove the UTXOs that were consolidated
             for utxo in utxos:
                 self.database.remove_utxo(utxo.txid, utxo.vout)
                 logging.info(f"Removed spent UTXO from database: {utxo.txid}:{utxo.vout}")
@@ -1845,16 +1846,10 @@ class WalletManager:
                 from_addresses=input_addresses,
                 to_addresses=[consolidated_address],
                 wallet_name=name,
-                change_address=consolidated_address,
+                change_address=None,
                 status="pending"
             )
             self.database.store_transaction(tx_obj)
-
-            console.print(f"\n[green]Successfully consolidated {len(utxos)} UTXOs![/green]")
-            console.print(f"[yellow]TXID:[/yellow] {txid}")
-            console.print(f"[yellow]Total Amount:[/yellow] {consolidated_amount} BTC")
-            console.print(f"[yellow]Fee:[/yellow] {fee} BTC")
-            console.print(f"[yellow]Consolidated Address:[/yellow] {consolidated_address}")
 
             return txid
 

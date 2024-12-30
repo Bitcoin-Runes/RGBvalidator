@@ -53,7 +53,7 @@ def balance(name: str):
     """Get wallet balance and list UTXOs"""
     try:
         # Get balance info
-        balance_info = wallet_manager.get_balance(name)
+        balance_info = wallet_manager.get_balance(name, suppress_output=True)
         
         # Get all UTXOs including frozen ones
         utxos = wallet_manager.get_utxos(name, include_frozen=True)
@@ -159,15 +159,66 @@ def freeze_utxo(name: str,
 
 @wallet.command()
 def consolidate(name: str, 
-               fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB. Default is 5 sat/vB")):
+               fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB. Default is 5 sat/vB"),
+               batch_size: Optional[int] = typer.Option(50, help="Maximum number of UTXOs to consolidate in a single transaction")):
     """Consolidate all unfrozen UTXOs into a single UTXO"""
     try:
-        txid = wallet_manager.consolidate_utxos(name, fee_rate=fee_rate)
-        if txid:
-            console.print(f"\n[green]✅ Successfully consolidated UTXOs![/green]")
-            console.print(f"[yellow]Transaction ID:[/yellow] {txid}")
+        # Get all UTXOs first to show summary
+        utxos = wallet_manager.get_utxos(name, include_frozen=True)
+        unfrozen_utxos = [u for u in utxos if not u.frozen]
+        
+        if len(unfrozen_utxos) < 2:
+            console.print("[yellow]Need at least 2 unfrozen UTXOs to consolidate[/yellow]")
+            return
+        
+        # Show consolidation summary
+        console.print(f"\n[bold]Consolidation Summary:[/bold]")
+        console.print(f"Total UTXOs: {len(utxos)}")
+        console.print(f"Unfrozen UTXOs: {len(unfrozen_utxos)}")
+        console.print(f"Frozen UTXOs: {len(utxos) - len(unfrozen_utxos)}")
+        console.print(f"Batch Size: {batch_size}")
+        console.print(f"Fee Rate: {fee_rate} sat/vB\n")
+        
+        # Calculate number of batches needed
+        num_batches = (len(unfrozen_utxos) + batch_size - 1) // batch_size
+        if num_batches > 1:
+            console.print(f"[yellow]UTXOs will be consolidated in {num_batches} batches[/yellow]\n")
+        
+        # Process each batch
+        successful_txids = []
+        for batch_num in range(num_batches):
+            start_idx = batch_num * batch_size
+            end_idx = min(start_idx + batch_size, len(unfrozen_utxos))
+            
+            if num_batches > 1:
+                console.print(f"[cyan]Processing batch {batch_num + 1} of {num_batches}...[/cyan]")
+            
+            try:
+                txid = wallet_manager.consolidate_utxos(name, fee_rate=fee_rate, batch_size=batch_size)
+                if txid:
+                    successful_txids.append(txid)
+                    console.print(f"[green]✅ Batch {batch_num + 1} consolidated successfully![/green]")
+                    console.print(f"[yellow]Transaction ID:[/yellow] {txid}\n")
+            except Exception as batch_error:
+                console.print(f"[red]❌ Error in batch {batch_num + 1}: {str(batch_error)}[/red]")
+                if "tx-size" in str(batch_error):
+                    console.print("[yellow]Try reducing the batch size with --batch-size option[/yellow]")
+                continue
+        
+        # Show final summary
+        if successful_txids:
+            console.print("\n[bold green]Consolidation Summary:[/bold green]")
+            console.print(f"Successfully completed {len(successful_txids)} of {num_batches} batches")
+            console.print("\n[yellow]Transaction IDs:[/yellow]")
+            for i, txid in enumerate(successful_txids, 1):
+                console.print(f"Batch {i}: {txid}")
+        else:
+            console.print("\n[red]No UTXOs were consolidated successfully[/red]")
+            
     except Exception as e:
         console.print(f"[red]❌ Error: {str(e)}[/red]")
+        if "tx-size" in str(e):
+            console.print("[yellow]The transaction is too large. Try using a smaller batch size with --batch-size option[/yellow]")
 
 @wallet.command()
 def help():
