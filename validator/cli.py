@@ -1,6 +1,7 @@
-from typing import Optional, List
+from typing import Optional, List, Dict
 import typer
 from decimal import Decimal
+import json
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -11,8 +12,10 @@ from .wallet import wallet_manager
 app = typer.Typer()
 wallet = typer.Typer()
 token = typer.Typer()
+nft = typer.Typer()
 app.add_typer(wallet, name="wallet")
 app.add_typer(token, name="token")
+app.add_typer(nft, name="nft")
 console = Console()
 
 @wallet.command()
@@ -525,6 +528,333 @@ def list(wallet_name: str):
                 amount if tx_type != "Mint" else "Supply",
                 utxo.txid,
                 utxo.memo
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]") 
+
+@nft.command()
+def mint(
+    wallet_name: str,
+    collection_name: str,
+    token_id: str,
+    name: str,
+    description: Optional[str] = typer.Option(None, help="Description of the NFT"),
+    attributes: Optional[str] = typer.Option(None, help="JSON string of attributes, e.g., '{\"color\": \"red\"}'"),
+    media_url: Optional[str] = typer.Option(None, help="URL to the NFT media"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Mint a single NFT"""
+    try:
+        # Parse attributes if provided
+        attr_dict = {}
+        if attributes:
+            try:
+                attr_dict = json.loads(attributes)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON format for attributes")
+
+        # Create NFT data
+        nft_data = {
+            "transaction_type": "mint721",  # ERC721 inspired
+            "nft": {
+                "collection": collection_name,
+                "token_id": token_id,
+                "name": name,
+                "description": description,
+                "attributes": attr_dict,
+                "media_url": media_url
+            },
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create and freeze UTXO with the NFT data
+        try:
+            amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"NFT Mint: {collection_name}#{token_id}"
+            
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]NFT minted successfully![/green]")
+            console.print(f"[yellow]Collection:[/yellow] {collection_name}")
+            console.print(f"[yellow]Token ID:[/yellow] {token_id}")
+            console.print(f"[yellow]Name:[/yellow] {name}")
+            if description:
+                console.print(f"[yellow]Description:[/yellow] {description}")
+            if attributes:
+                console.print(f"[yellow]Attributes:[/yellow] {attributes}")
+            if media_url:
+                console.print(f"[yellow]Media URL:[/yellow] {media_url}")
+            console.print(f"[yellow]TXID:[/yellow] {txid}")
+            console.print("\n[bold cyan]NFT minting UTXO has been frozen.[/bold cyan]")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create NFT UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@nft.command()
+def mint_batch(
+    wallet_name: str,
+    collection_name: str,
+    batch_file: str = typer.Option(..., help="Path to JSON file containing batch NFT data"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Mint multiple NFTs from a batch file"""
+    try:
+        # Read and validate batch file
+        try:
+            with open(batch_file, 'r') as f:
+                batch_data = json.load(f)
+        except Exception as e:
+            raise ValueError(f"Failed to read batch file: {str(e)}")
+
+        if not isinstance(batch_data, list):
+            raise ValueError("Batch file must contain a JSON array of NFT data")
+
+        # Process each NFT in the batch
+        minted_nfts = []
+        for nft_item in batch_data:
+            required_fields = ['token_id', 'name']
+            if not all(field in nft_item for field in required_fields):
+                raise ValueError(f"Missing required fields in NFT data: {required_fields}")
+
+            # Create NFT data
+            nft_data = {
+                "transaction_type": "mint721_batch",
+                "nft": {
+                    "collection": collection_name,
+                    "token_id": nft_item['token_id'],
+                    "name": nft_item['name'],
+                    "description": nft_item.get('description'),
+                    "attributes": nft_item.get('attributes', {}),
+                    "media_url": nft_item.get('media_url')
+                },
+                "timestamp": "ISO-8601 timestamp",
+                "version": "1.0"
+            }
+
+            # Create and freeze UTXO for each NFT
+            try:
+                amount = Decimal("0.00001000")  # 1000 satoshis
+                memo = f"NFT Mint Batch: {collection_name}#{nft_item['token_id']}"
+                
+                txid = wallet_manager.create_and_freeze_utxo(
+                    wallet_name,
+                    amount,
+                    memo=memo,
+                    fee_rate=fee_rate
+                )
+                
+                minted_nfts.append({
+                    "token_id": nft_item['token_id'],
+                    "txid": txid
+                })
+                
+            except Exception as e:
+                console.print(f"[red]Failed to mint NFT {nft_item['token_id']}: {str(e)}[/red]")
+                continue
+
+        # Display results
+        if minted_nfts:
+            console.print(f"\n[green]Successfully minted {len(minted_nfts)} NFTs![/green]")
+            
+            table = Table(title=f"Minted NFTs in {collection_name}")
+            table.add_column("Token ID", style="cyan")
+            table.add_column("TXID", style="yellow")
+            
+            for nft in minted_nfts:
+                table.add_row(nft['token_id'], nft['txid'])
+            
+            console.print(table)
+        else:
+            console.print("[red]No NFTs were minted successfully[/red]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@nft.command()
+def burn(
+    wallet_name: str,
+    collection_name: str,
+    token_id: str,
+    utxo: str = typer.Option(..., help="TXID of the NFT mint transaction"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Burn an NFT"""
+    try:
+        # Verify the UTXO exists and is frozen
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        nft_utxo = next((u for u in utxos if u.txid == utxo and u.frozen), None)
+        
+        if not nft_utxo:
+            raise ValueError(f"NFT UTXO {utxo} not found or is not frozen")
+        
+        expected_memo_prefix = f"NFT Mint: {collection_name}#{token_id}"
+        if not nft_utxo.memo or not nft_utxo.memo.startswith(expected_memo_prefix):
+            raise ValueError(f"UTXO {utxo} is not associated with NFT {collection_name}#{token_id}")
+        
+        # Create burn transaction data
+        burn_data = {
+            "transaction_type": "burn721",
+            "nft": {
+                "collection": collection_name,
+                "token_id": token_id
+            },
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create a new frozen UTXO for the burn
+        try:
+            amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"NFT Burn: {collection_name}#{token_id}"
+            
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]NFT burned successfully![/green]")
+            console.print(f"[yellow]Collection:[/yellow] {collection_name}")
+            console.print(f"[yellow]Token ID:[/yellow] {token_id}")
+            console.print(f"[yellow]Burn TXID:[/yellow] {txid}")
+            console.print(f"[yellow]Original Mint TXID:[/yellow] {utxo}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create burn UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@nft.command()
+def transfer(
+    wallet_name: str,
+    collection_name: str,
+    token_id: str,
+    recipient: str,
+    utxo: str = typer.Option(..., help="TXID of the NFT mint transaction"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Transfer an NFT to another address"""
+    try:
+        # Verify the UTXO exists and is frozen
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        nft_utxo = next((u for u in utxos if u.txid == utxo and u.frozen), None)
+        
+        if not nft_utxo:
+            raise ValueError(f"NFT UTXO {utxo} not found or is not frozen")
+        
+        expected_memo_prefix = f"NFT Mint: {collection_name}#{token_id}"
+        if not nft_utxo.memo or not nft_utxo.memo.startswith(expected_memo_prefix):
+            raise ValueError(f"UTXO {utxo} is not associated with NFT {collection_name}#{token_id}")
+        
+        # Create transfer transaction data
+        transfer_data = {
+            "transaction_type": "transfer721",
+            "nft": {
+                "collection": collection_name,
+                "token_id": token_id,
+                "recipient": recipient
+            },
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create a new frozen UTXO for the transfer
+        try:
+            amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"NFT Transfer: {collection_name}#{token_id} To: {recipient}"
+            
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]NFT transferred successfully![/green]")
+            console.print(f"[yellow]Collection:[/yellow] {collection_name}")
+            console.print(f"[yellow]Token ID:[/yellow] {token_id}")
+            console.print(f"[yellow]Recipient:[/yellow] {recipient}")
+            console.print(f"[yellow]Transfer TXID:[/yellow] {txid}")
+            console.print(f"[yellow]Original Mint TXID:[/yellow] {utxo}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create transfer UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@nft.command()
+def list(wallet_name: str, collection_name: Optional[str] = None):
+    """List all NFTs in the wallet, optionally filtered by collection"""
+    try:
+        # Get all frozen UTXOs
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        nft_utxos = [u for u in utxos if u.frozen and u.memo and u.memo.startswith("NFT")]
+        
+        if not nft_utxos:
+            console.print("[yellow]No NFTs found in this wallet[/yellow]")
+            return
+        
+        # Filter by collection if specified
+        if collection_name:
+            nft_utxos = [u for u in nft_utxos if collection_name in u.memo]
+            if not nft_utxos:
+                console.print(f"[yellow]No NFTs found in collection: {collection_name}[/yellow]")
+                return
+        
+        # Create a table for NFTs
+        table = Table(title=f"NFTs in Wallet: {wallet_name}")
+        table.add_column("Collection", style="cyan")
+        table.add_column("Token ID", style="magenta")
+        table.add_column("Type", style="green")
+        table.add_column("TXID", style="yellow")
+        table.add_column("Details", style="blue")
+        
+        for utxo in nft_utxos:
+            memo_parts = utxo.memo.split(": ")
+            tx_type = memo_parts[0].replace("NFT ", "")
+            
+            if tx_type == "Mint" or tx_type == "Mint Batch":
+                collection_id = memo_parts[1].split("#")
+                collection = collection_id[0]
+                token_id = collection_id[1] if len(collection_id) > 1 else "Unknown"
+                details = "Original Mint"
+            elif tx_type == "Transfer":
+                transfer_info = memo_parts[1].split(" To: ")
+                collection_id = transfer_info[0].split("#")
+                collection = collection_id[0]
+                token_id = collection_id[1]
+                details = f"Transferred to: {transfer_info[1]}"
+            elif tx_type == "Burn":
+                collection_id = memo_parts[1].split("#")
+                collection = collection_id[0]
+                token_id = collection_id[1]
+                details = "Burned"
+            else:
+                collection = "Unknown"
+                token_id = "Unknown"
+                details = utxo.memo
+            
+            table.add_row(
+                collection,
+                token_id,
+                tx_type,
+                utxo.txid,
+                details
             )
         
         console.print(table)
