@@ -63,7 +63,42 @@ A robust RGB validation software with advanced Bitcoin smart contract support an
 
 ## Quick Start
 
-### Installation
+### Docker Installation (Recommended)
+
+The easiest way to get started is using Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/anoncodemonkey/RGBvalidator.git
+cd token-validator
+
+# Create .env file
+cat > .env << EOL
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
+SECRET_KEY=your-secret-key-here
+EOL
+
+# Start the services
+docker-compose up -d
+
+# Check services status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+The Docker setup provides:
+- Automatic Bitcoin Core setup (regtest mode)
+- Pre-configured validator service
+- Persistent data storage
+- Health monitoring
+- Automatic restarts
+
+### Manual Installation (Alternative)
+
+If you prefer not to use Docker:
 
 ```bash
 # Clone the repository
@@ -80,6 +115,16 @@ pip install -r requirements.txt
 
 ### Configuration
 
+#### Using Docker (Recommended)
+Edit the `.env` file:
+```env
+# Bitcoin RPC settings (used by both services)
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
+SECRET_KEY=your-secret-key-here
+```
+
+#### Manual Configuration
 Create a `.env` file:
 ```env
 # Choose network: mainnet, testnet, or regtest
@@ -90,6 +135,21 @@ BITCOIN_RPC_HOST=localhost
 BITCOIN_RPC_PORT=18443  # Regtest default
 BITCOIN_RPC_USER=your_username
 BITCOIN_RPC_PASSWORD=your_password
+```
+
+### Using the Validator
+
+With Docker:
+```bash
+# Execute commands inside the validator container
+docker-compose exec validator python -m validator wallet create my_wallet
+docker-compose exec validator python -m validator wallet generate my_wallet
+```
+
+Without Docker:
+```bash
+python -m validator wallet create my_wallet
+python -m validator wallet generate my_wallet
 ```
 
 ### Wallet Management
@@ -237,3 +297,66 @@ python -m validator wallet network wallet_name
 ## License
 
 MIT License - see [LICENSE](LICENSE) file
+
+## Development Environment
+
+### Using Docker (Recommended)
+
+1. Start development environment:
+```bash
+docker-compose up -d
+```
+
+2. Access logs:
+```bash
+docker-compose logs -f validator  # Validator logs
+docker-compose logs -f bitcoin   # Bitcoin Core logs
+```
+
+3. Execute commands:
+```bash
+# Create wallet
+docker-compose exec validator python -m validator wallet create dev_wallet
+
+# Generate address
+docker-compose exec validator python -m validator wallet generate dev_wallet
+
+# Check balance
+docker-compose exec validator python -m validator wallet balance dev_wallet
+```
+
+4. Stop environment:
+```bash
+docker-compose down  # Stop services
+docker-compose down -v  # Stop services and remove volumes
+```
+
+### Data Persistence
+
+Docker volumes are used to persist data:
+- `validator_data`: Wallet and application data
+- `validator_logs`: Application logs
+- `bitcoin_data`: Bitcoin Core data
+
+### Troubleshooting Docker Setup
+
+1. Check service status:
+```bash
+docker-compose ps
+```
+
+2. View service logs:
+```bash
+docker-compose logs -f
+```
+
+3. Restart services:
+```bash
+docker-compose restart
+```
+
+4. Reset environment:
+```bash
+docker-compose down -v
+docker-compose up -d
+```

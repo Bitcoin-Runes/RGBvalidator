@@ -3,6 +3,8 @@
 ## Table of Contents
 
 1. [Installation](#installation)
+   - [Docker Installation](#docker-installation)
+   - [Manual Installation](#manual-installation)
 2. [Configuration](#configuration)
 3. [Network Support](#network-support)
 4. [Working with Wallets](#working-with-wallets)
@@ -14,7 +16,50 @@
 
 ## Installation
 
-### Prerequisites
+### Docker Installation (Recommended)
+
+The simplest way to get started is using Docker:
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/token-validator.git
+cd token-validator
+```
+
+2. Create environment file:
+```bash
+cat > .env << EOL
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
+SECRET_KEY=your-secret-key-here
+EOL
+```
+
+3. Start services:
+```bash
+docker-compose up -d
+```
+
+4. Verify installation:
+```bash
+# Check service status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+#### Docker Benefits
+- Pre-configured Bitcoin Core node
+- Automatic service orchestration
+- Built-in health monitoring
+- Data persistence
+- Automatic restarts
+- Isolated environment
+
+### Manual Installation
+
+#### Prerequisites
 
 - Python 3.11 or higher
 - Bitcoin Core node (optional for mainnet/testnet)
@@ -40,6 +85,40 @@ pip install -r requirements.txt
 ```
 
 ## Configuration
+
+### Docker Configuration
+
+1. Environment Setup:
+Edit `.env` file with your settings:
+```env
+# Bitcoin RPC Configuration
+BITCOIN_RPC_USER=your_username
+BITCOIN_RPC_PASSWORD=your_password
+SECRET_KEY=your-secret-key-here
+
+# Optional overrides
+BITCOIN_RPC_HOST=bitcoin
+BITCOIN_RPC_PORT=18443
+```
+
+2. Service Configuration:
+The `docker-compose.yml` file provides:
+- Validator service configuration
+- Bitcoin Core setup
+- Network settings
+- Volume management
+- Health checks
+
+3. Accessing Services:
+```bash
+# Execute validator commands
+docker-compose exec validator python -m validator [command]
+
+# Access Bitcoin Core
+docker-compose exec bitcoin bitcoin-cli -regtest [command]
+```
+
+### Manual Configuration
 
 ### Environment Setup
 
@@ -67,6 +146,53 @@ DATABASE_URL=sqlite:///validator.db
 - Regtest: 18443
 
 ## Network Support
+
+### Working with Docker Networks
+
+#### Mainnet
+```bash
+# Update docker-compose.yml bitcoin service
+services:
+  bitcoin:
+    command:
+      -server=1
+      -rpcallowip=0.0.0.0/0
+      # ... other settings ...
+
+# Start services
+docker-compose up -d
+
+# Execute commands
+docker-compose exec validator python -m validator wallet create mainnet_wallet --network mainnet
+```
+
+#### Testnet
+```bash
+# Update docker-compose.yml bitcoin service
+services:
+  bitcoin:
+    command:
+      -testnet=1
+      -server=1
+      # ... other settings ...
+
+# Start services
+docker-compose up -d
+
+# Execute commands
+docker-compose exec validator python -m validator wallet create testnet_wallet --network testnet
+```
+
+#### Regtest (Default)
+```bash
+# Default configuration works with regtest
+docker-compose up -d
+
+# Execute commands
+docker-compose exec validator python -m validator wallet create regtest_wallet --network regtest
+```
+
+### Manual Network Setup
 
 ### Working with Mainnet
 
@@ -112,7 +238,44 @@ python -m validator wallet address regtest_wallet
 
 ## Working with Wallets
 
-### Wallet Commands
+### Docker Wallet Commands
+
+1. Create Wallet:
+```bash
+docker-compose exec validator python -m validator wallet create <name> [--network <network>] [--type <address_type>]
+```
+
+2. List Wallets:
+```bash
+docker-compose exec validator python -m validator wallet list
+```
+
+3. Generate Address:
+```bash
+docker-compose exec validator python -m validator wallet generate <name> [--count <number>]
+```
+
+4. Get Balance:
+```bash
+docker-compose exec validator python -m validator wallet balance <name>
+```
+
+5. View Network Info:
+```bash
+docker-compose exec validator python -m validator wallet network <name>
+```
+
+6. Export Wallet:
+```bash
+docker-compose exec validator python -m validator wallet export <name> <path>
+```
+
+7. Import Wallet:
+```bash
+docker-compose exec validator python -m validator wallet import <path>
+```
+
+### Manual Wallet Commands
 
 1. Create Wallet:
 ```bash
@@ -281,7 +444,48 @@ python -m validator backup restore <backup_id>
 
 ## Troubleshooting
 
-### Common Issues
+### Docker-Specific Issues
+
+1. Service Status:
+```bash
+# Check service status
+docker-compose ps
+
+# View detailed status
+docker-compose ps validator
+docker-compose ps bitcoin
+```
+
+2. Logs:
+```bash
+# View all logs
+docker-compose logs -f
+
+# View specific service logs
+docker-compose logs -f validator
+docker-compose logs -f bitcoin
+```
+
+3. Service Management:
+```bash
+# Restart services
+docker-compose restart
+
+# Rebuild services
+docker-compose up -d --build
+
+# Reset environment
+docker-compose down -v
+docker-compose up -d
+```
+
+4. Common Docker Issues:
+- Port conflicts: Check if ports 5000 or 18443 are in use
+- Volume permissions: Ensure proper ownership of mounted volumes
+- Network connectivity: Verify services can communicate
+- Resource constraints: Monitor container resource usage
+
+### General Issues
 
 1. Network Connection:
 ```bash

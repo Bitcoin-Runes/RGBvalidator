@@ -1,37 +1,62 @@
-FROM python:3.11-slim
+# Use Python 3.11 slim as base
+FROM python:3.11-slim-bullseye
 
-# Install system dependencies including Rust
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    pkg-config \
-    libssl-dev \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
-    && . $HOME/.cargo/env \
-    && rustup target add x86_64-unknown-linux-gnu
+# Set build arguments
+ARG USER=validator
+ARG USER_ID=1000
+ARG GROUP_ID=1000
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/root/.cargo/bin:${PATH}"
+    DEBIAN_FRONTEND=noninteractive \
+    PATH="/home/${USER}/.local/bin:${PATH}" \
+    VIRTUAL_ENV="/home/${USER}/venv"
 
-WORKDIR /app
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    pkg-config \
+    libssl-dev \
+    git \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Create non-root user
+RUN groupadd -g ${GROUP_ID} ${USER} && \
+    useradd -m -u ${USER_ID} -g ${USER} -s /bin/bash ${USER}
 
 # Create necessary directories
-RUN mkdir -p /app/data/wallets /app/data/backups /app/logs
+RUN mkdir -p /app/data/wallets /app/data/backups /app/logs && \
+    chown -R ${USER}:${USER} /app
+
+# Switch to non-root user
+USER ${USER}
+WORKDIR /app
+
+# Set up Python virtual environment
+RUN python -m venv ${VIRTUAL_ENV}
+ENV PATH="${VIRTUAL_ENV}/bin:$PATH"
+
+# Install Python dependencies
+COPY --chown=${USER}:${USER} requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
-
-# Expose port
-EXPOSE 5000
+COPY --chown=${USER}:${USER} . .
 
 # Create volume mount points
 VOLUME ["/app/data", "/app/logs"]
 
-# Run the application
-CMD ["python", "-m", "validator"] 
+# Expose ports
+EXPOSE 5000 18443
+
+# Set default command
+ENTRYPOINT ["python", "-m"]
+CMD ["validator"] 
