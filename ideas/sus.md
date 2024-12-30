@@ -26,9 +26,47 @@ Single Use Seal (SUS) is a cryptographic mechanism that creates an unbreakable b
 ```json
 {
     "content": {
-        "data": "Application-specific content",
+        "transaction_type": "mint20 | burn20 | transfer20",
+        "token": {
+            "name": "Token Name",
+            "symbol": "TKN",
+            "decimals": 8
+        },
+        "transactions": [
+            {
+                "type": "mint20",
+                "amount": "1000000000",  // In smallest unit (satoshis)
+                "recipient": "bc1...",    // Bitcoin address
+                "metadata": {
+                    "initial_supply": true,
+                    "purpose": "Initial token distribution"
+                }
+            },
+            {
+                "type": "transfer20",
+                "from": "bc1...",         // Sender's Bitcoin address
+                "to": "bc1...",           // Recipient's Bitcoin address
+                "amount": "500000000",    // Amount in smallest unit
+                "metadata": {
+                    "purpose": "Payment for services",
+                    "reference": "INV-2024-001"
+                }
+            },
+            {
+                "type": "burn20",
+                "amount": "100000000",    // Amount to burn
+                "burner": "bc1...",       // Address initiating the burn
+                "metadata": {
+                    "reason": "Token reduction event",
+                    "burn_type": "scheduled"
+                }
+            }
+        ],
         "timestamp": "ISO-8601 timestamp",
-        "version": "1.0"
+        "version": "1.0",
+        "chain_id": "mainnet | testnet | regtest",
+        "network_fee": "1000",           // In satoshis
+        "batch_id": "unique_batch_identifier" // For related transactions
     },
     "seal": {
         "utxo": {
@@ -36,14 +74,50 @@ Single Use Seal (SUS) is a cryptographic mechanism that creates an unbreakable b
             "vout": "Output index",
             "value": "Amount in satoshis"
         },
+        "signer": {
+            "address": "bc1...",          // Bitcoin address that will sign
+            "public_key": "02...",        // Public key of the signer
+            "signature_type": "schnorr",   // schnorr | ecdsa
+            "signature": "sig_hex_here"    // Signature of the canonicalized content
+        },
         "commitment": {
             "hash": "SHA-256 of canonicalized content",
             "scheme": "Taproot",
-            "metadata": "Additional seal information"
+            "metadata": {
+                "transaction_count": 3,
+                "total_value": "1600000000",
+                "operation_type": "batch"
+            }
         }
     }
 }
 ```
+
+### Transaction Types
+
+#### 1. Mint20
+- **Purpose**: Create new tokens
+- **Requirements**:
+  - Must specify recipient address
+  - Amount must be positive
+  - Cannot exceed maximum supply if defined
+  - Only authorized minters can execute
+
+#### 2. Transfer20
+- **Purpose**: Move tokens between addresses
+- **Requirements**:
+  - Valid sender and recipient addresses
+  - Sufficient balance in sender's address
+  - Amount must be positive
+  - Cannot send to zero address
+
+#### 3. Burn20
+- **Purpose**: Permanently remove tokens from circulation
+- **Requirements**:
+  - Valid burner address
+  - Sufficient balance to burn
+  - Amount must be positive
+  - Optional burn reason for tracking
 
 ### Cryptographic Components
 

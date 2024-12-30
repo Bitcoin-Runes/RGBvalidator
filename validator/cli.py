@@ -10,7 +10,9 @@ from .wallet import wallet_manager
 
 app = typer.Typer()
 wallet = typer.Typer()
+token = typer.Typer()
 app.add_typer(wallet, name="wallet")
+app.add_typer(token, name="token")
 console = Console()
 
 @wallet.command()
@@ -312,3 +314,220 @@ def help():
     console.print("\n[bold magenta]💡 For more details on a specific command:[/bold magenta]")
     console.print("python3 -m validator wallet <command> --help")
     console.print("\n") 
+
+@token.command()
+def mint(
+    wallet_name: str,
+    name: str,
+    symbol: str,
+    decimals: int = typer.Option(6, help="Number of decimal places for the token"),
+    description: Optional[str] = typer.Option(None, help="Optional description of the token"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Mint a new token"""
+    try:
+        # Create token data
+        token_data = {
+            "transaction_type": "mint20",
+            "token": {
+                "name": name,
+                "symbol": symbol.upper(),
+                "decimals": decimals,
+                "description": description
+            },
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create and freeze UTXO with the token data
+        try:
+            # Use a small amount for the UTXO (e.g., 1000 satoshis)
+            amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"Token Mint: {symbol.upper()}"
+            
+            # Create the frozen UTXO
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]Token minted successfully![/green]")
+            console.print(f"[yellow]Token Name:[/yellow] {name}")
+            console.print(f"[yellow]Symbol:[/yellow] {symbol.upper()}")
+            console.print(f"[yellow]Decimals:[/yellow] {decimals}")
+            if description:
+                console.print(f"[yellow]Description:[/yellow] {description}")
+            console.print(f"[yellow]TXID:[/yellow] {txid}")
+            console.print("\n[bold cyan]Token minting UTXO has been frozen.[/bold cyan]")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create token UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@token.command()
+def burn(
+    wallet_name: str,
+    symbol: str,
+    amount: float,
+    utxo: str = typer.Option(..., help="TXID of the token mint transaction"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Burn tokens"""
+    try:
+        # Verify the UTXO exists and is frozen
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        mint_utxo = next((u for u in utxos if u.txid == utxo and u.frozen), None)
+        
+        if not mint_utxo:
+            raise ValueError(f"Token mint UTXO {utxo} not found or is not frozen")
+        
+        if not mint_utxo.memo or not mint_utxo.memo.startswith(f"Token Mint: {symbol.upper()}"):
+            raise ValueError(f"UTXO {utxo} is not associated with token {symbol.upper()}")
+        
+        # Create burn transaction data
+        burn_data = {
+            "transaction_type": "burn20",
+            "token": {
+                "symbol": symbol.upper(),
+            },
+            "transactions": [{
+                "type": "burn20",
+                "amount": str(amount),
+                "utxo": utxo
+            }],
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create a new frozen UTXO for the burn
+        try:
+            # Use a small amount for the UTXO
+            utxo_amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"Token Burn: {symbol.upper()} Amount: {amount}"
+            
+            # Create the frozen UTXO
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                utxo_amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]Tokens burned successfully![/green]")
+            console.print(f"[yellow]Symbol:[/yellow] {symbol.upper()}")
+            console.print(f"[yellow]Amount:[/yellow] {amount}")
+            console.print(f"[yellow]Burn TXID:[/yellow] {txid}")
+            console.print(f"[yellow]Original Mint TXID:[/yellow] {utxo}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create burn UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@token.command()
+def transfer(
+    wallet_name: str,
+    symbol: str,
+    amount: float,
+    recipient: str,
+    utxo: str = typer.Option(..., help="TXID of the token mint transaction"),
+    fee_rate: Optional[float] = typer.Option(5.0, help="Fee rate in sat/vB"),
+):
+    """Transfer tokens to another address"""
+    try:
+        # Verify the UTXO exists and is frozen
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        mint_utxo = next((u for u in utxos if u.txid == utxo and u.frozen), None)
+        
+        if not mint_utxo:
+            raise ValueError(f"Token mint UTXO {utxo} not found or is not frozen")
+        
+        if not mint_utxo.memo or not mint_utxo.memo.startswith(f"Token Mint: {symbol.upper()}"):
+            raise ValueError(f"UTXO {utxo} is not associated with token {symbol.upper()}")
+        
+        # Create transfer transaction data
+        transfer_data = {
+            "transaction_type": "transfer20",
+            "token": {
+                "symbol": symbol.upper(),
+            },
+            "transactions": [{
+                "type": "transfer20",
+                "amount": str(amount),
+                "utxo": utxo,
+                "recipient": recipient
+            }],
+            "timestamp": "ISO-8601 timestamp",
+            "version": "1.0"
+        }
+
+        # Create a new frozen UTXO for the transfer
+        try:
+            # Use a small amount for the UTXO
+            utxo_amount = Decimal("0.00001000")  # 1000 satoshis
+            memo = f"Token Transfer: {symbol.upper()} Amount: {amount} To: {recipient}"
+            
+            # Create the frozen UTXO
+            txid = wallet_manager.create_and_freeze_utxo(
+                wallet_name,
+                utxo_amount,
+                memo=memo,
+                fee_rate=fee_rate
+            )
+            
+            console.print(f"\n[green]Tokens transferred successfully![/green]")
+            console.print(f"[yellow]Symbol:[/yellow] {symbol.upper()}")
+            console.print(f"[yellow]Amount:[/yellow] {amount}")
+            console.print(f"[yellow]Recipient:[/yellow] {recipient}")
+            console.print(f"[yellow]Transfer TXID:[/yellow] {txid}")
+            console.print(f"[yellow]Original Mint TXID:[/yellow] {utxo}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create transfer UTXO: {str(e)}")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+
+@token.command()
+def list(wallet_name: str):
+    """List all tokens in the wallet"""
+    try:
+        # Get all frozen UTXOs
+        utxos = wallet_manager.get_utxos(wallet_name, include_frozen=True)
+        token_utxos = [u for u in utxos if u.frozen and u.memo and u.memo.startswith("Token")]
+        
+        if not token_utxos:
+            console.print("[yellow]No tokens found in this wallet[/yellow]")
+            return
+        
+        # Create a table for tokens
+        table = Table(title=f"Tokens in Wallet: {wallet_name}")
+        table.add_column("Symbol", style="cyan")
+        table.add_column("Type", style="magenta")
+        table.add_column("Amount", style="green")
+        table.add_column("TXID", style="yellow")
+        table.add_column("Memo", style="blue")
+        
+        for utxo in token_utxos:
+            memo_parts = utxo.memo.split(": ")
+            tx_type = memo_parts[0].replace("Token ", "")
+            symbol = memo_parts[1].split(" ")[0] if len(memo_parts) > 1 else "Unknown"
+            amount = memo_parts[1].split("Amount: ")[1].split(" ")[0] if "Amount: " in utxo.memo else "N/A"
+            
+            table.add_row(
+                symbol,
+                tx_type,
+                amount if tx_type != "Mint" else "Supply",
+                utxo.txid,
+                utxo.memo
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]") 
