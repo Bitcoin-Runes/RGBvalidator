@@ -29,6 +29,7 @@ from decimal import Decimal
 from bitcoinrpc.authproxy import AuthServiceProxy
 from .schemas import UTXO, Transaction
 import requests
+from . import WALLETS_DIR, BASE_DATA_DIR
 
 settings = get_settings()
 console = Console()
@@ -367,7 +368,7 @@ class WalletManager:
     """Manages HD wallets with local key storage and encryption"""
     
     def __init__(self):
-        self.wallets_dir = Path("data/wallets")
+        self.wallets_dir = WALLETS_DIR
         self.wallets_dir.mkdir(parents=True, exist_ok=True)
         self._init_encryption()
         self.network = getattr(settings, "bitcoin_network", "mainnet")
@@ -388,11 +389,47 @@ class WalletManager:
     
     def _init_encryption(self):
         """Initialize encryption for wallet data"""
-        key_file = Path("data/wallet.key")
-        if not key_file.exists():
-            key = Fernet.generate_key()
-            key_file.write_bytes(key)
-        self.fernet = Fernet(key_file.read_bytes())
+        try:
+            key_file = BASE_DATA_DIR / "wallet.key"
+            if not key_file.exists():
+                # Create directory if it doesn't exist
+                key_file.parent.mkdir(parents=True, exist_ok=True)
+                # Generate and save new key
+                key = Fernet.generate_key()
+                key_file.write_bytes(key)
+                logging.info("Generated new encryption key")
+            
+            # Read the key and initialize Fernet
+            key = key_file.read_bytes()
+            self.fernet = Fernet(key)
+            
+            # Verify key is valid
+            try:
+                # Test encryption/decryption
+                test_data = b"test"
+                encrypted = self.fernet.encrypt(test_data)
+                decrypted = self.fernet.decrypt(encrypted)
+                if decrypted != test_data:
+                    raise ValueError("Encryption key verification failed")
+            except Exception as e:
+                logging.error(f"Encryption key verification failed: {str(e)}")
+                # Backup old key if it exists
+                if key_file.exists():
+                    backup_file = key_file.with_suffix('.key.backup')
+                    key_file.rename(backup_file)
+                    logging.info(f"Backed up old key to {backup_file}")
+                
+                # Generate new key
+                key = Fernet.generate_key()
+                key_file.write_bytes(key)
+                self.fernet = Fernet(key)
+                logging.info("Generated new encryption key after verification failure")
+                
+                console.print("[yellow]Warning: Encryption key was reset. You may need to recreate your wallets.[/yellow]")
+                
+        except Exception as e:
+            logging.error(f"Error initializing encryption: {str(e)}")
+            raise ValueError(f"Failed to initialize wallet encryption: {str(e)}")
     
     def _validate_wallet_name(self, name: Any) -> str:
         """Validate and normalize wallet name"""
@@ -596,16 +633,40 @@ class WalletManager:
             logging.error(f"Error creating wallet: {str(e)}", exc_info=True)
             raise
     
-    def get_wallet(self, name: Any, suppress_output: bool = False) -> Optional[Dict]:
-        """Get wallet information with input validation"""
+    def get_wallet(self, name: str, suppress_output: bool = False) -> Optional[Dict]:
+        """Get wallet information including the mnemonic if available."""
         try:
-            validated_name = self._validate_wallet_name(name)
-            wallet_data = self._load_wallet(validated_name)
-            if wallet_data and not suppress_output:
-                display_wallet(wallet_data)
-            return wallet_data
+            name = self._validate_wallet_name(name)
+            wallet_path = WALLETS_DIR / f"{name}.json"
+            if not wallet_path.exists():
+                if not suppress_output:
+                    print(f"Wallet '{name}' not found")
+                return None
+                
+            try:
+                with open(wallet_path, 'r') as f:
+                    wallet = json.load(f)
+                    
+                # Add mnemonic if available (encrypted)
+                if 'encrypted_mnemonic' in wallet:
+                    try:
+                        mnemonic = self.fernet.decrypt(wallet['encrypted_mnemonic'].encode()).decode()
+                        wallet['mnemonic'] = mnemonic
+                    except Exception as e:
+                        logging.error(f"Error decrypting mnemonic: {str(e)}")
+                        # Don't include mnemonic if decryption fails
+                        pass
+                    
+                return wallet
+            except Exception as e:
+                if not suppress_output:
+                    print(f"Error reading wallet '{name}': {e}")
+                return None
+                
         except Exception as e:
-            logging.error(f"Error loading wallet '{name}': {str(e)}")
+            logging.error(f"Error getting wallet: {str(e)}")
+            if not suppress_output:
+                print(f"Error loading wallet: {str(e)}")
             return None
     
     def list_wallets(self) -> None:
@@ -630,6 +691,7 @@ class WalletManager:
                         address_type: Optional[str] = None, quiet: bool = False) -> str:
         """Generate a new address for the wallet"""
         try:
+            logging.info(f"Generating new address for wallet: {name}")
             name = self._validate_wallet_name(name)
             wallet_data = self._load_wallet(name)
             if not wallet_data:
@@ -637,6 +699,9 @@ class WalletManager:
             
             network = network or wallet_data.get("network", "mainnet")
             address_type = address_type or wallet_data.get("address_type", "segwit")
+            current_index = wallet_data.get('address_index', 0)
+            
+            logging.info(f"Current wallet state - Network: {network}, Type: {address_type}, Index: {current_index}")
             
             # Initialize network
             _init_network(network)
@@ -648,16 +713,18 @@ class WalletManager:
             
             # Generate new address
             wallet.clean_derivation()
-            path = self._get_derivation_path(network, address_type, wallet_data['address_index'])
+            path = self._get_derivation_path(network, address_type, current_index + 1)
             wallet.from_path(path)
             
             # Get appropriate address based on type and network
             address = self._get_address_for_type(wallet, network, address_type)
+            logging.info(f"Generated new address: {address} at index {current_index + 1}")
             
             # Update wallet data
             wallet_data["addresses"].append(address)
-            wallet_data["address_index"] += 1
+            wallet_data["address_index"] = current_index + 1
             self._save_wallet(name, wallet_data)
+            logging.info(f"Updated wallet data with new address")
             
             # Only display if not in quiet mode
             if not quiet:
@@ -668,7 +735,7 @@ class WalletManager:
             
             return address
         except Exception as e:
-            logging.error(f"Error generating address for wallet '{name}': {str(e)}")
+            logging.error(f"Error generating address for wallet '{name}': {str(e)}", exc_info=True)
             raise
     
     def _wallet_exists(self, name: str) -> bool:
@@ -717,20 +784,27 @@ class WalletManager:
             new_addresses = []
             
             # Decrypt mnemonic and recreate wallet
-            mnemonic = self.fernet.decrypt(wallet_data["encrypted_mnemonic"].encode()).decode()
+            try:
+                mnemonic = self.fernet.decrypt(wallet_data["encrypted_mnemonic"].encode()).decode()
+            except Exception as e:
+                raise ValueError(f"Failed to decrypt wallet mnemonic: {str(e)}")
+
             wallet = HDWallet(symbol=BTC)
             wallet.from_mnemonic(mnemonic=mnemonic)
             
             # Generate new addresses
-            current_index = wallet_data['address_index']
+            current_index = wallet_data.get('address_index', 0)  # Default to 0 if not found
             for i in range(count):
-                wallet.clean_derivation()
-                path = self._get_derivation_path(network, address_type, current_index + i)
-                wallet.from_path(path)
-                
-                # Get appropriate address based on type and network
-                address = self._get_address_for_type(wallet, network, address_type)
-                new_addresses.append(address)
+                try:
+                    wallet.clean_derivation()
+                    path = self._get_derivation_path(network, address_type, current_index + i)
+                    wallet.from_path(path)
+                    
+                    # Get appropriate address based on type and network
+                    address = self._get_address_for_type(wallet, network, address_type)
+                    new_addresses.append(address)
+                except Exception as e:
+                    raise ValueError(f"Failed to generate address {i+1}: {str(e)}")
             
             # Update wallet data
             wallet_data["addresses"].extend(new_addresses)
@@ -752,7 +826,7 @@ class WalletManager:
             return new_addresses
         except Exception as e:
             logging.error(f"Error generating addresses for wallet '{name}': {str(e)}")
-            raise
+            raise ValueError(str(e))
 
     def get_network_info(self, name: str, network: Optional[NetworkType] = None, address_type: Optional[str] = None) -> None:
         """Display network-specific wallet information"""
@@ -1856,6 +1930,94 @@ class WalletManager:
         except Exception as e:
             logging.error(f"Error consolidating UTXOs: {str(e)}")
             raise ValueError(f"Failed to consolidate UTXOs: {str(e)}")
+
+    def delete_wallet(self, name: str) -> bool:
+        """Delete a wallet and all its associated data"""
+        try:
+            name = self._validate_wallet_name(name)
+            wallet_file = self.wallets_dir / f"{name}.json"
+            
+            if not wallet_file.exists():
+                raise ValueError(f"Wallet '{name}' not found")
+            
+            # Delete the wallet file
+            wallet_file.unlink()
+            
+            # Delete any associated UTXOs and transactions from database
+            self.database.delete_wallet_data(name)
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error deleting wallet '{name}': {str(e)}")
+            raise
+
+    def get_frozen_utxos(self, wallet_name: str) -> List[UTXO]:
+        """Get all frozen UTXOs for a wallet"""
+        try:
+            # Get UTXOs from database that are marked as frozen
+            frozen_utxos = self.database.get_utxos(wallet_name, include_frozen=True)
+            return [utxo for utxo in frozen_utxos if utxo.frozen]
+        except Exception as e:
+            logging.error(f"Error getting frozen UTXOs for wallet {wallet_name}: {str(e)}")
+            return []
+
+    def get_addresses(self, wallet_name: str) -> List[Dict[str, Any]]:
+        """Get all addresses for a wallet with their details."""
+        try:
+            logging.info(f"Getting addresses for wallet: {wallet_name}")
+            wallet = self.get_wallet(wallet_name)
+            if not wallet:
+                raise ValueError(f"Wallet '{wallet_name}' not found")
+            
+            addresses = []
+            network = wallet.get('network', 'mainnet')
+            address_type = wallet.get('address_type', 'legacy')
+            address_index = wallet.get('address_index', 0)
+            
+            logging.info(f"Wallet info - Network: {network}, Type: {address_type}, Index: {address_index}")
+            
+            # Decrypt mnemonic
+            mnemonic = self.fernet.decrypt(wallet['encrypted_mnemonic'].encode()).decode()
+            hd_wallet = HDWallet(symbol=BTC)
+            hd_wallet.from_mnemonic(mnemonic=mnemonic)
+            
+            # Get addresses from wallet data
+            for i in range(address_index + 1):
+                logging.info(f"Processing address {i} of {address_index}")
+                # Get derivation path
+                path = self._get_derivation_path(network, address_type, i)
+                logging.info(f"Using derivation path: {path}")
+                
+                # Generate keys
+                hd_wallet.clean_derivation()
+                hd_wallet.from_path(path)
+                private_key_hex = hd_wallet.private_key()
+                private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
+                public_key = private_key.get_public_key()
+                
+                # Get address based on type
+                if address_type == 'taproot':
+                    pubkey_hex = public_key.to_hex()
+                    address = create_p2tr_address(pubkey_hex, network)
+                else:
+                    address = _get_address_from_private_key(private_key, network, address_type)
+                
+                logging.info(f"Generated address: {address}")
+                
+                addresses.append({
+                    'address': address,
+                    'derivation_path': path,
+                    'public_key': public_key.to_hex(),
+                    'private_key': private_key.to_wif()
+                })
+            
+            logging.info(f"Total addresses generated: {len(addresses)}")
+            return addresses
+            
+        except Exception as e:
+            logging.error(f"Error getting addresses for wallet {wallet_name}: {str(e)}", exc_info=True)
+            raise ValueError(f"Failed to get addresses: {str(e)}")
 
 # Create a global instance
 wallet_manager = WalletManager() 

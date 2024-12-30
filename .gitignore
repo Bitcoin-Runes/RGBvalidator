@@ -4,3 +4,5 @@ ai
 data
 tokens.db
 validator/__pycache__
+node_modules
+package-lock.json

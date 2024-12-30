@@ -288,4 +288,33 @@ class Database:
                 WHERE wallet_name = ? AND frozen = 0
             """, (wallet_name,))
             conn.commit()
-            logging.info(f"Cleared unfrozen UTXOs for wallet: {wallet_name}") 
+            logging.info(f"Cleared unfrozen UTXOs for wallet: {wallet_name}")
+
+    def delete_wallet_data(self, wallet_name: str):
+        """Delete all data associated with a wallet"""
+        with self._get_connection() as conn:
+            try:
+                # Start a transaction
+                conn.execute("BEGIN TRANSACTION")
+                
+                # Delete UTXOs
+                conn.execute("DELETE FROM utxos WHERE wallet_name = ?", (wallet_name,))
+                logging.info(f"Deleted UTXOs for wallet: {wallet_name}")
+                
+                # Delete transactions
+                conn.execute("DELETE FROM transactions WHERE wallet_name = ?", (wallet_name,))
+                logging.info(f"Deleted transactions for wallet: {wallet_name}")
+                
+                # Delete wallet entry
+                conn.execute("DELETE FROM wallets WHERE wallet_name = ?", (wallet_name,))
+                logging.info(f"Deleted wallet entry: {wallet_name}")
+                
+                # Commit the transaction
+                conn.commit()
+                logging.info(f"Successfully deleted all data for wallet: {wallet_name}")
+                
+            except Exception as e:
+                # Rollback in case of error
+                conn.rollback()
+                logging.error(f"Error deleting wallet data: {str(e)}")
+                raise ValueError(f"Failed to delete wallet data: {str(e)}") 

@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+
+{% block title %}Wallet Details{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Wallet Header -->
+    <div class="bg-white shadow px-4 py-5 sm:rounded-lg sm:p-6">
+        <div class="space-y-4">
+            <!-- Title and Network -->
+            <div class="flex justify-between items-start">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">{{ wallet.name }}</h1>
+                    <p class="mt-1 text-sm text-gray-500">{{ wallet.network }} Network - {{ wallet.address_type }}</p>
+                </div>
+                <div>
+                    <button onclick="confirmDelete()"
+                            class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200">
+                        Delete Wallet
+                    </button>
+                </div>
+            </div>
+
+            <!-- Delete Confirmation Modal -->
+            <div id="deleteModal" class="hidden fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
+                <div class="bg-white p-6 rounded-lg max-w-md w-full">
+                    <h3 class="text-lg font-medium text-red-600 mb-4">⚠️ Delete Wallet</h3>
+                    <p class="text-sm text-gray-500 mb-4">
+                        You are about to permanently delete this wallet. This action cannot be undone.
+                    </p>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Type wallet name to confirm: <span class="font-bold">{{ wallet.name }}</span>
+                        </label>
+                        <input type="text" id="confirmName" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-red-500 focus:border-red-500"
+                               placeholder="Enter wallet name">
+                    </div>
+                    <div class="flex justify-end space-x-3">
+                        <button onclick="hideDeleteModal()"
+                                class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md">
+                            Cancel
+                        </button>
+                        <button onclick="proceedWithDelete()"
+                                class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md">
+                            Delete Permanently
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                function confirmDelete() {
+                    document.getElementById('deleteModal').classList.remove('hidden');
+                }
+
+                function hideDeleteModal() {
+                    document.getElementById('deleteModal').classList.add('hidden');
+                    document.getElementById('confirmName').value = '';
+                }
+
+                function proceedWithDelete() {
+                    const confirmName = document.getElementById('confirmName').value;
+                    const walletName = "{{ wallet.name }}";
+                    
+                    if (confirmName === walletName) {
+                        // Submit the delete request
+                        fetch(`/api/wallets/${walletName}/delete`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                window.location.href = '/wallets';
+                            } else {
+                                alert('Error: ' + data.error);
+                            }
+                        })
+                        .catch(error => {
+                            alert('Error: ' + error);
+                        });
+                    } else {
+                        alert('Wallet name does not match. Deletion cancelled.');
+                        hideDeleteModal();
+                    }
+                }
+            </script>
+
+            <!-- Stats Grid -->
+            <dl class="mt-5 grid grid-cols-4 gap-5">
+                <!-- Spendable Balance -->
+                <div class="col-span-1 px-4 py-5 bg-gray-50 shadow rounded-lg overflow-hidden sm:p-6">
+                    <dt class="text-sm font-medium text-gray-500 truncate">Spendable Balance, BTC</dt>
+                    <dd class="mt-1 text-3xl font-semibold text-gray-900">{{ "%.8f"|format(wallet.spendable_balance|float) }}</dd>
+                </div>
+
+                <!-- Active Addresses -->
+                <div class="col-span-1 px-4 py-5 bg-gray-50 shadow rounded-lg overflow-hidden sm:p-6">
+                    <dt class="text-sm font-medium text-gray-500 truncate">Active Addresses</dt>
+                    <dd class="mt-1 text-3xl font-semibold text-gray-900">{{ wallet.active_addresses|length }}</dd>
+                </div>
+
+                <!-- Inactive Addresses -->
+                <div class="col-span-1 px-4 py-5 bg-gray-50 shadow rounded-lg overflow-hidden sm:p-6">
+                    <dt class="text-sm font-medium text-gray-500 truncate">Inactive Addresses</dt>
+                    <dd class="mt-1 text-3xl font-semibold text-gray-900">{{ wallet.inactive_addresses|length }}</dd>
+                </div>
+
+                <!-- Frozen UTXOs -->
+                <div class="col-span-1 px-4 py-5 bg-gray-50 shadow rounded-lg overflow-hidden sm:p-6">
+                    <dt class="text-sm font-medium text-gray-500 truncate">Frozen UTXOs</dt>
+                    <dd class="mt-1 text-3xl font-semibold text-gray-900">{{ wallet.frozen_utxo_count }}</dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="bg-white shadow sm:rounded-lg">
+        <div class="border-b border-gray-200">
+            <nav class="-mb-px flex space-x-8 px-6" aria-label="Tabs">
+                <a href="{{ url_for('wallet_detail', name=wallet.name) }}?tab=utxos" 
+                   class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm 
+                          {% if request.args.get('tab', 'utxos') == 'utxos' %}
+                          border-indigo-500 text-indigo-600
+                          {% else %}
+                          border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300
+                          {% endif %}">
+                    Frozen UTXOs
+                </a>
+                <a href="{{ url_for('wallet_detail', name=wallet.name) }}?tab=addresses"
+                   class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+                          {% if request.args.get('tab') == 'addresses' %}
+                          border-indigo-500 text-indigo-600
+                          {% else %}
+                          border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300
+                          {% endif %}">
+                    Active Addresses
+                </a>
+                <a href="{{ url_for('wallet_detail', name=wallet.name) }}?tab=inactive"
+                   class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+                          {% if request.args.get('tab') == 'inactive' %}
+                          border-indigo-500 text-indigo-600
+                          {% else %}
+                          border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300
+                          {% endif %}">
+                    Inactive Addresses
+                </a>
+                <a href="{{ url_for('wallet_detail', name=wallet.name) }}?tab=export"
+                   class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm
+                          {% if request.args.get('tab') == 'export' %}
+                          border-indigo-500 text-indigo-600
+                          {% else %}
+                          border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300
+                          {% endif %}">
+                    Export & Backup
+                </a>
+            </nav>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="p-6">
+            <!-- UTXOs Tab -->
+            {% if request.args.get('tab', 'utxos') == 'utxos' %}
+            <div class="space-y-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Frozen UTXOs</h3>
+                    <form method="GET" action="{{ url_for('wallet_detail', name=wallet.name) }}">
+                        <input type="hidden" name="tab" value="utxos">
+                        <button type="submit" 
+                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                            Refresh
+                        </button>
+                    </form>
+                </div>
+                {% if wallet.frozen_utxos %}
+                    <div class="space-y-2">
+                        {% for utxo in wallet.frozen_utxos %}
+                            <div class="bg-gray-50 p-4 rounded-lg">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <div class="text-sm font-mono break-all">TXID: {{ utxo.txid }}</div>
+                                        <div class="mt-1 text-sm text-gray-500">Amount: {{ "%.8f"|format(utxo.amount|float) }} BTC</div>
+                                        <div class="mt-1 text-sm text-gray-500">Confirmations: {{ utxo.confirmations|default(0) }}</div>
+                                        {% if utxo.memo %}
+                                            <div class="mt-1 text-sm text-gray-500">Memo: {{ utxo.memo }}</div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="ml-4">
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                            Frozen
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center text-gray-500 py-4">
+                        No frozen UTXOs found
+                    </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Addresses Tab -->
+            {% if request.args.get('tab') == 'addresses' %}
+            <div class="space-y-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Active Addresses</h3>
+                </div>
+                {% if wallet.active_addresses %}
+                    {% for address, balance in wallet.active_addresses.items() %}
+                        <div class="bg-gray-50 p-3 rounded-md">
+                            <div class="text-sm font-mono break-all">{{ address }}</div>
+                            <div class="mt-1 text-sm text-gray-500">Balance: {{ "%.8f"|format(balance|float) }} BTC</div>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center text-gray-500 py-4">
+                        No addresses with spendable UTXOs found
+                    </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Inactive Addresses Tab -->
+            {% if request.args.get('tab') == 'inactive' %}
+            <div class="space-y-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Inactive Addresses</h3>
+                    <form method="POST" action="{{ url_for('generate_address', name=wallet.name) }}">
+                        <button type="submit" 
+                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                            Generate New Address
+                        </button>
+                    </form>
+                </div>
+                
+                {% if wallet.inactive_addresses %}
+                    {% for addr in wallet.inactive_addresses %}
+                        <div class="bg-gray-50 p-4 rounded-lg space-y-2">
+                            <div class="flex justify-between items-start">
+                                <div class="space-y-1">
+                                    <div class="text-sm font-mono break-all">{{ addr.address }}</div>
+                                    <div class="text-sm text-gray-500">Path: {{ addr.derivation_path }}</div>
+                                    <div class="text-sm text-gray-500">Public Key: {{ addr.public_key }}</div>
+                                    <button onclick="togglePrivateKey('{{ addr.address }}')"
+                                            class="text-sm text-indigo-600 hover:text-indigo-800">
+                                        Show Private Key
+                                    </button>
+                                    <div id="pk_{{ addr.address }}" class="hidden">
+                                        <div class="text-sm text-red-500">Private Key: {{ addr.private_key }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center text-gray-500 py-4">
+                        No inactive addresses found
+                    </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Export/Backup Tab -->
+            {% if request.args.get('tab') == 'export' %}
+            <div class="space-y-4">
+                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-sm text-yellow-700">
+                                Warning: Keep your recovery phrase safe and never share it with anyone.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-4 rounded-lg">
+                    <h4 class="text-lg font-medium text-gray-900 mb-2">Recovery Phrase</h4>
+                    <div class="relative">
+                        <div id="mnemonic" class="hidden bg-gray-100 p-3 rounded font-mono text-sm break-all">
+                            {{ wallet.mnemonic }}
+                        </div>
+                        <button onclick="toggleMnemonic()" id="showMnemonicBtn"
+                                class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md">
+                            Show Recovery Phrase
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-4 rounded-lg mt-4">
+                    <h4 class="text-lg font-medium text-gray-900 mb-2">Export Wallet</h4>
+                    <a href="{{ url_for('export_wallet', name=wallet.name) }}" 
+                       class="inline-block px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md">
+                        Download Wallet Backup
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function togglePrivateKey(address) {
+            const pkElement = document.getElementById(`pk_${address}`);
+            pkElement.classList.toggle('hidden');
+        }
+
+        function toggleMnemonic() {
+            const mnemonicElement = document.getElementById('mnemonic');
+            const buttonElement = document.getElementById('showMnemonicBtn');
+            
+            if (mnemonicElement.classList.contains('hidden')) {
+                mnemonicElement.classList.remove('hidden');
+                buttonElement.textContent = 'Hide Recovery Phrase';
+            } else {
+                mnemonicElement.classList.add('hidden');
+                buttonElement.textContent = 'Show Recovery Phrase';
+            }
+        }
+    </script>
+</div>
+{% endblock %} 

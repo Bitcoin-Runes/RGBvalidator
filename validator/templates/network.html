@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}Network{% endblock %}
+
+{% block content %}
+<div x-data="networkManager()" class="space-y-6">
+    <!-- Network Status -->
+    <div class="bg-white shadow px-4 py-5 sm:rounded-lg sm:p-6">
+        <div class="md:grid md:grid-cols-3 md:gap-6">
+            <div class="md:col-span-1">
+                <h3 class="text-lg font-medium leading-6 text-gray-900">Network Status</h3>
+                <p class="mt-1 text-sm text-gray-500">
+                    View and manage DHT network nodes.
+                </p>
+            </div>
+            <div class="mt-5 md:mt-0 md:col-span-2">
+                <div class="space-y-4">
+                    <template x-if="nodes.length > 0">
+                        <div class="space-y-4">
+                            <template x-for="node in nodes" :key="node.node_id">
+                                <div class="bg-gray-50 p-4 rounded-lg">
+                                    <div class="flex justify-between items-center">
+                                        <div>
+                                            <span class="font-medium" x-text="node.role + ': ' + node.node_id"></span>
+                                            <span class="ml-2 text-sm text-gray-500" x-text="'Network: ' + node.network"></span>
+                                        </div>
+                                        <button @click="stopNode(node.node_id)" 
+                                                class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200">
+                                            Stop Node
+                                        </button>
+                                    </div>
+                                    <div class="mt-2 text-sm text-gray-500">
+                                        <div x-text="'Status: ' + node.status"></div>
+                                        <div x-text="'Peers: ' + (node.peers ? node.peers.length : 0)"></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="nodes.length === 0">
+                        <div class="text-center text-gray-500">
+                            No active nodes
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Node -->
+    <div class="bg-white shadow px-4 py-5 sm:rounded-lg sm:p-6">
+        <div class="md:grid md:grid-cols-3 md:gap-6">
+            <div class="md:col-span-1">
+                <h3 class="text-lg font-medium leading-6 text-gray-900">Start Node</h3>
+                <p class="mt-1 text-sm text-gray-500">
+                    Start a new DHT node as either a bootstrap node or a peer.
+                </p>
+            </div>
+            <div class="mt-5 md:mt-0 md:col-span-2">
+                <form @submit.prevent="startNode">
+                    <div class="grid grid-cols-6 gap-6">
+                        <div class="col-span-6 sm:col-span-3">
+                            <label for="wallet_name" class="block text-sm font-medium text-gray-700">Wallet Name</label>
+                            <select x-model="form.wallet_name" id="wallet_name" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                                <option value="">Select a wallet</option>
+                                {% for wallet in wallets %}
+                                <option value="{{ wallet.name }}">{{ wallet.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-span-6 sm:col-span-3">
+                            <label for="port" class="block text-sm font-medium text-gray-700">Port</label>
+                            <input type="number" x-model="form.port" id="port" class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                        </div>
+
+                        <div class="col-span-6">
+                            <div class="flex items-center">
+                                <input type="checkbox" x-model="form.is_bootstrap" id="is_bootstrap" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                <label for="is_bootstrap" class="ml-2 block text-sm text-gray-900">
+                                    Start as bootstrap node
+                                </label>
+                            </div>
+                        </div>
+
+                        <div x-show="!form.is_bootstrap" class="col-span-6">
+                            <label for="bootstrap_node" class="block text-sm font-medium text-gray-700">Bootstrap Node Address</label>
+                            <input type="text" x-model="form.bootstrap_node" id="bootstrap_node" placeholder="localhost:8000" class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                        </div>
+                    </div>
+                    <div class="mt-5">
+                        <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Start Node
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function networkManager() {
+    return {
+        nodes: [],
+        form: {
+            wallet_name: '',
+            port: 8000,
+            is_bootstrap: false,
+            bootstrap_node: ''
+        },
+        init() {
+            this.refreshNodes();
+            // Refresh nodes every 10 seconds
+            setInterval(() => this.refreshNodes(), 10000);
+        },
+        async refreshNodes() {
+            try {
+                const response = await fetch('/network/nodes');
+                const data = await response.json();
+                this.nodes = data.nodes;
+            } catch (error) {
+                console.error('Error fetching nodes:', error);
+            }
+        },
+        async startNode() {
+            try {
+                const formData = new FormData();
+                formData.append('wallet_name', this.form.wallet_name);
+                formData.append('port', this.form.port);
+                formData.append('is_bootstrap', this.form.is_bootstrap);
+                if (!this.form.is_bootstrap && this.form.bootstrap_node) {
+                    formData.append('bootstrap_node', this.form.bootstrap_node);
+                }
+
+                const response = await fetch('/network/sync/dht', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    await this.refreshNodes();
+                    this.form = {
+                        wallet_name: '',
+                        port: 8000,
+                        is_bootstrap: false,
+                        bootstrap_node: ''
+                    };
+                } else {
+                    alert(result.error || 'Failed to start node');
+                }
+            } catch (error) {
+                console.error('Error starting node:', error);
+                alert('Failed to start node');
+            }
+        },
+        async stopNode(nodeId) {
+            try {
+                const response = await fetch(`/network/sync/dht/stop/${nodeId}`, {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    await this.refreshNodes();
+                } else {
+                    alert(result.error || 'Failed to stop node');
+                }
+            } catch (error) {
+                console.error('Error stopping node:', error);
+                alert('Failed to stop node');
+            }
+        }
+    }
+}
+</script>
+{% endblock %} 
