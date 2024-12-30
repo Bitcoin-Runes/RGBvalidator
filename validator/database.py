@@ -4,6 +4,7 @@ from typing import List, Optional, Dict
 from pathlib import Path
 from decimal import Decimal
 from .schemas import WalletInfo, UTXO, Transaction
+import logging
 
 class Database:
     def __init__(self, db_path: str = "data/wallet.db"):
@@ -11,10 +12,11 @@ class Database:
         self._init_db()
 
     def _init_db(self):
-        """Initialize database with required tables"""
+        """Initialize database with required tables and handle schema updates"""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         
         with self._get_connection() as conn:
+            # Create initial tables
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS wallets (
                     wallet_name TEXT PRIMARY KEY,
@@ -23,6 +25,7 @@ class Database:
                 )
             """)
             
+            # Create UTXO table with basic structure
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS utxos (
                     txid TEXT,
@@ -53,6 +56,21 @@ class Database:
                 )
             """)
             
+            # Check and add new columns if they don't exist
+            try:
+                # Check if confirmations column exists
+                conn.execute("SELECT confirmations FROM utxos LIMIT 1")
+            except sqlite3.OperationalError:
+                logging.info("Adding confirmations column to utxos table")
+                conn.execute("ALTER TABLE utxos ADD COLUMN confirmations INTEGER DEFAULT 0")
+            
+            try:
+                # Check if is_coinbase column exists
+                conn.execute("SELECT is_coinbase FROM utxos LIMIT 1")
+            except sqlite3.OperationalError:
+                logging.info("Adding is_coinbase column to utxos table")
+                conn.execute("ALTER TABLE utxos ADD COLUMN is_coinbase BOOLEAN DEFAULT 0")
+            
             conn.commit()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -64,10 +82,21 @@ class Database:
     def store_utxo(self, utxo: UTXO):
         """Store or update a UTXO"""
         with self._get_connection() as conn:
+            # Check if UTXO already exists and is frozen
+            existing = conn.execute("""
+                SELECT frozen FROM utxos 
+                WHERE txid = ? AND vout = ? AND wallet_name = ?
+            """, (utxo.txid, utxo.vout, utxo.wallet_name)).fetchone()
+
+            if existing and existing[0] and not utxo.frozen:
+                # Don't update frozen UTXOs unless explicitly freezing
+                logging.info(f"Skipping update of frozen UTXO: {utxo.txid}:{utxo.vout}")
+                return
+
             conn.execute("""
                 INSERT OR REPLACE INTO utxos 
-                (txid, vout, amount, address, frozen, memo, wallet_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (txid, vout, amount, address, frozen, memo, wallet_name, confirmations, is_coinbase)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 utxo.txid,
                 utxo.vout,
@@ -75,9 +104,12 @@ class Database:
                 utxo.address,
                 utxo.frozen,
                 utxo.memo,
-                utxo.wallet_name
+                utxo.wallet_name,
+                getattr(utxo, 'confirmations', 0),
+                getattr(utxo, 'is_coinbase', False)
             ))
             conn.commit()
+            logging.info(f"{'Updated' if existing else 'Stored'} UTXO: {utxo.txid}:{utxo.vout} (frozen: {utxo.frozen})")
 
     def get_utxos(self, wallet_name: str, include_frozen: bool = False) -> List[UTXO]:
         """Get all UTXOs for a wallet"""
@@ -90,15 +122,27 @@ class Database:
                 query += " AND frozen = 0"
             
             results = conn.execute(query, (wallet_name,)).fetchall()
-            return [UTXO(
-                txid=row['txid'],
-                vout=row['vout'],
-                amount=Decimal(str(row['amount'])),
-                address=row['address'],
-                frozen=bool(row['frozen']),
-                memo=row['memo'],
-                wallet_name=row['wallet_name']
-            ) for row in results]
+            utxos = []
+            for row in results:
+                try:
+                    utxo = UTXO(
+                        txid=row['txid'],
+                        vout=row['vout'],
+                        amount=Decimal(str(row['amount'])),
+                        address=row['address'],
+                        frozen=bool(row['frozen']),
+                        memo=row['memo'],
+                        wallet_name=row['wallet_name'],
+                        confirmations=row['confirmations'] if 'confirmations' in row.keys() else 0,
+                        is_coinbase=bool(row['is_coinbase']) if 'is_coinbase' in row.keys() else False
+                    )
+                    utxos.append(utxo)
+                except Exception as e:
+                    logging.error(f"Error creating UTXO object from row: {str(e)}")
+                    continue
+            
+            logging.info(f"Retrieved {len(utxos)} UTXOs for wallet {wallet_name} (include_frozen: {include_frozen})")
+            return utxos
 
     def freeze_utxo(self, txid: str, vout: int, memo: Optional[str] = None):
         """Freeze a UTXO"""
@@ -109,6 +153,7 @@ class Database:
                 WHERE txid = ? AND vout = ?
             """, (memo, txid, vout))
             conn.commit()
+            logging.info(f"Froze UTXO: {txid}:{vout}")
 
     def unfreeze_utxo(self, txid: str, vout: int):
         """Unfreeze a UTXO"""
@@ -119,6 +164,7 @@ class Database:
                 WHERE txid = ? AND vout = ?
             """, (txid, vout))
             conn.commit()
+            logging.info(f"Unfroze UTXO: {txid}:{vout}")
 
     def store_transaction(self, tx: Transaction):
         """Store a transaction"""
@@ -216,8 +262,30 @@ class Database:
     def remove_utxo(self, txid: str, vout: int):
         """Remove a UTXO from the database"""
         with self._get_connection() as conn:
+            # Check if UTXO is frozen before removing
+            frozen = conn.execute("""
+                SELECT frozen FROM utxos 
+                WHERE txid = ? AND vout = ?
+            """, (txid, vout)).fetchone()
+
+            if frozen and frozen[0]:
+                logging.warning(f"Attempted to remove frozen UTXO: {txid}:{vout}")
+                return
+
             conn.execute("""
                 DELETE FROM utxos 
                 WHERE txid = ? AND vout = ?
             """, (txid, vout))
-            conn.commit() 
+            conn.commit()
+            logging.info(f"Removed UTXO: {txid}:{vout}")
+
+    def clear_utxos(self, wallet_name: str):
+        """Clear all unfrozen UTXOs for a wallet"""
+        with self._get_connection() as conn:
+            # Only clear unfrozen UTXOs
+            conn.execute("""
+                DELETE FROM utxos 
+                WHERE wallet_name = ? AND frozen = 0
+            """, (wallet_name,))
+            conn.commit()
+            logging.info(f"Cleared unfrozen UTXOs for wallet: {wallet_name}") 

@@ -596,12 +596,12 @@ class WalletManager:
             logging.error(f"Error creating wallet: {str(e)}", exc_info=True)
             raise
     
-    def get_wallet(self, name: Any) -> Optional[Dict]:
+    def get_wallet(self, name: Any, suppress_output: bool = False) -> Optional[Dict]:
         """Get wallet information with input validation"""
         try:
             validated_name = self._validate_wallet_name(name)
             wallet_data = self._load_wallet(validated_name)
-            if wallet_data:
+            if wallet_data and not suppress_output:
                 display_wallet(wallet_data)
             return wallet_data
         except Exception as e:
@@ -627,7 +627,7 @@ class WalletManager:
         display_wallets(wallets)
     
     def generate_address(self, name: str, network: Optional[NetworkType] = None, 
-                        address_type: Optional[str] = None) -> str:
+                        address_type: Optional[str] = None, quiet: bool = False) -> str:
         """Generate a new address for the wallet"""
         try:
             name = self._validate_wallet_name(name)
@@ -659,11 +659,12 @@ class WalletManager:
             wallet_data["address_index"] += 1
             self._save_wallet(name, wallet_data)
             
-            # Display the new address
-            console.print(f"\n[bold green]Generated new {address_type} address:[/bold green]")
-            console.print(f"[yellow]Network:[/yellow] {network}")
-            console.print(f"[yellow]Address:[/yellow] {address}")
-            console.print(f"[yellow]Path:[/yellow] {path}\n")
+            # Only display if not in quiet mode
+            if not quiet:
+                console.print(f"\nGenerated new {address_type} address:")
+                console.print(f"Network: {network}")
+                console.print(f"Address: {address}")
+                console.print(f"Path: {path}\n")
             
             return address
         except Exception as e:
@@ -838,8 +839,8 @@ class WalletManager:
             logging.error(f"Error extracting Taproot public key: {str(e)}")
             return None
 
-    def get_balance(self, name: str) -> Dict[str, float]:
-        """Get the balance for a wallet"""
+    def get_balance(self, name: str, suppress_output: bool = False) -> Dict[str, float]:
+        """Get the balance for a wallet and refresh UTXO information"""
         try:
             name = self._validate_wallet_name(name)
             wallet_data = self._load_wallet(name)
@@ -853,13 +854,8 @@ class WalletManager:
             rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
             rpc_password = os.getenv("BITCOIN_RPC_PASSWORD", "pass")
             rpc_host = os.getenv("BITCOIN_RPC_HOST", "127.0.0.1")
-            
-            # Set RPC port based on network, but allow override from env
             rpc_port = int(os.getenv("BITCOIN_RPC_PORT", self.default_ports[network]))
 
-            from bitcoinrpc.authproxy import AuthServiceProxy
-            from bitcoinutils.script import Script
-            
             # Create RPC connection
             rpc_connection = AuthServiceProxy(
                 f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
@@ -867,42 +863,38 @@ class WalletManager:
 
             total_balance = 0
             balances = {}
+            
+            # Get existing UTXOs and separate frozen from unfrozen
+            existing_utxos = self.database.get_utxos(name, include_frozen=True)
+            frozen_utxos = {(utxo.txid, utxo.vout): utxo for utxo in existing_utxos if utxo.frozen}
+            unfrozen_utxos = {(utxo.txid, utxo.vout): utxo for utxo in existing_utxos if not utxo.frozen}
+            
+            # Clear only unfrozen UTXOs
+            for utxo in unfrozen_utxos.values():
+                self.database.remove_utxo(utxo.txid, utxo.vout)
+            
+            # Get required coinbase maturity
+            required_depth = 100  # Both regtest and mainnet require 100 blocks
 
             # Get balance for each address using scantxoutset and sync UTXOs
             for address in addresses:
                 try:
                     addr_type = get_address_type(address)
                     logging.info(f"Processing {addr_type} address: {address}")
-
-                    # Create the appropriate descriptor based on address type and network
-                    if network == "regtest":
-                        if addr_type == 'taproot':
-                            if address.startswith("bcrt1p"):
-                                desc = f"addr({address})"
-                            else:
-                                logging.error(f"Invalid regtest Taproot address format: {address}")
-                                continue
-                        elif addr_type == 'segwit':
-                            if address.startswith("bcrt1q"):
-                                desc = f"addr({address})"
-                            else:
-                                logging.error(f"Invalid regtest SegWit address format: {address}")
-                                continue
-                        elif addr_type == 'nested-segwit':
-                            if address.startswith("2"):
-                                desc = f"addr({address})"
-                            else:
-                                logging.error(f"Invalid regtest nested SegWit address format: {address}")
-                                continue
-                        else:  # legacy
-                            if address.startswith(("m", "n")):
-                                desc = f"addr({address})"
-                            else:
-                                logging.error(f"Invalid regtest legacy address format: {address}")
-                                continue
-                    else:
+                    
+                    # Get descriptor based on address type
+                    desc = None
+                    if addr_type == "legacy":
                         desc = f"addr({address})"
-
+                    elif addr_type == "p2sh-segwit":
+                        desc = f"addr({address})"
+                    elif addr_type == "segwit":
+                        desc = f"addr({address})"
+                    elif addr_type == "taproot":
+                        desc = f"addr({address})"
+                    else:
+                        raise ValueError(f"Unsupported address type: {addr_type}")
+                    
                     logging.info(f"Using descriptor: {desc}")
 
                     # Scan the UTXO set for this address
@@ -911,36 +903,52 @@ class WalletManager:
                     if scan_result["success"]:
                         confirmed_balance = float(scan_result["total_amount"]) if "total_amount" in scan_result else 0
                         
-                        # Store UTXOs in database
+                        # Store and verify UTXOs in database
                         if "unspents" in scan_result:
                             for utxo in scan_result["unspents"]:
-                                utxo_obj = UTXO(
-                                    txid=utxo["txid"],
-                                    vout=utxo["vout"],
-                                    amount=Decimal(str(utxo["amount"])),
-                                    address=address,
-                                    frozen=False,
-                                    wallet_name=name
-                                )
-                                self.database.store_utxo(utxo_obj)
-                                logging.info(f"Stored UTXO: {utxo['txid']}:{utxo['vout']}")
-                        
-                        balances[address] = {
-                            "confirmed": confirmed_balance,
-                            "unconfirmed": 0,  # scantxoutset only shows confirmed balance
-                            "total": confirmed_balance,
-                            "type": addr_type
-                        }
-                        
-                        total_balance += confirmed_balance
-                        logging.info(f"Successfully retrieved balance for {addr_type} address {address}")
-                    else:
-                        logging.error(f"Scan failed for address {address}")
-                        balances[address] = {
-                            "error": "Scan failed",
-                            "type": addr_type
-                        }
+                                try:
+                                    # Get full transaction details
+                                    tx = rpc_connection.getrawtransaction(utxo["txid"], True)
+                                    
+                                    # Check if it's a coinbase transaction
+                                    is_coinbase = any(vin.get("coinbase") for vin in tx.get("vin", []))
+                                    confirmations = tx.get("confirmations", 0)
+                                    
+                                    # Only store mature UTXOs
+                                    if not is_coinbase or (is_coinbase and confirmations >= required_depth):
+                                        # Check if this UTXO was frozen
+                                        utxo_key = (utxo["txid"], utxo["vout"])
+                                        frozen_utxo = frozen_utxos.get(utxo_key)
+                                        
+                                        utxo_obj = UTXO(
+                                            txid=utxo["txid"],
+                                            vout=utxo["vout"],
+                                            amount=Decimal(str(utxo["amount"])),
+                                            address=address,
+                                            frozen=bool(frozen_utxo.frozen if frozen_utxo else False),
+                                            memo=frozen_utxo.memo if frozen_utxo else None,
+                                            wallet_name=name,
+                                            confirmations=confirmations,
+                                            is_coinbase=is_coinbase
+                                        )
+                                        self.database.store_utxo(utxo_obj)
+                                        logging.info(f"Stored verified UTXO: {utxo['txid']}:{utxo['vout']}")
+                                    else:
+                                        logging.info(f"Skipping immature coinbase UTXO: {utxo['txid']}:{utxo['vout']}")
+                                        confirmed_balance -= float(utxo["amount"])
+                                except Exception as e:
+                                    logging.error(f"Error verifying UTXO {utxo['txid']}: {str(e)}")
+                                    continue
                     
+                    balances[address] = {
+                        "confirmed": confirmed_balance,
+                        "unconfirmed": 0,  # scantxoutset only shows confirmed balance
+                        "total": confirmed_balance,
+                        "type": addr_type
+                    }
+                    
+                    total_balance += confirmed_balance
+                    logging.info(f"Successfully retrieved balance for {addr_type} address {address}")
                 except Exception as e:
                     logging.error(f"Error processing address {address}: {str(e)}")
                     balances[address] = {
@@ -948,33 +956,42 @@ class WalletManager:
                         "type": get_address_type(address)
                     }
 
+            # Restore any frozen UTXOs that weren't found in the scan
+            for frozen_utxo in frozen_utxos.values():
+                utxo_key = (frozen_utxo.txid, frozen_utxo.vout)
+                if utxo_key not in unfrozen_utxos:
+                    self.database.store_utxo(frozen_utxo)
+                    logging.info(f"Restored frozen UTXO: {frozen_utxo.txid}:{frozen_utxo.vout}")
+
             # Update wallet balance
             self.database.update_wallet_balance(name, Decimal(str(total_balance)))
 
-            # Display the balances with improved formatting
-            console.print(f"\n[bold green]Wallet Balance - {name}[/bold green]")
-            console.print(f"[magenta]Network:[/magenta] {network}")
-            console.print(f"[yellow]Total Confirmed Balance:[/yellow] {total_balance} BTC")
-            console.print("\n[bold]Address Balances:[/bold]")
-            
-            for addr, balance in balances.items():
-                if "error" in balance:
-                    console.print(f"[red]Address {addr} ({balance.get('type', 'unknown')}):[/red]")
-                    console.print(f"  Error: {balance['error']}")
-                else:
-                    addr_type = balance.get('type', 'unknown')
-                    console.print(f"[green]Address[/green] ({addr_type}): {addr}")
-                    console.print(f"  Confirmed: {balance['confirmed']} BTC")
-                    console.print("")
+            # Only display if not suppressed
+            if not suppress_output:
+                # Display the balances with improved formatting
+                console.print(f"\n[bold green]Wallet Balance - {name}[/bold green]")
+                console.print(f"[magenta]Network:[/magenta] {network}")
+                console.print(f"[yellow]Total Confirmed Balance:[/yellow] {total_balance} BTC")
+                console.print("\n[bold]Address Balances:[/bold]")
+                
+                for addr, balance in balances.items():
+                    if "error" in balance:
+                        console.print(f"[red]Address {addr} ({balance.get('type', 'unknown')}):[/red]")
+                        console.print(f"  Error: {balance['error']}")
+                    else:
+                        addr_type = balance.get('type', 'unknown')
+                        console.print(f"[green]Address[/green] ({addr_type}): {addr}")
+                        console.print(f"  Confirmed: {balance['confirmed']} BTC")
+                        console.print("")
 
             return {
                 "total_confirmed": total_balance,
                 "total_unconfirmed": 0,  # scantxoutset only shows confirmed balance
-                "address_balances": balances
+                "addresses": balances
             }
 
         except Exception as e:
-            logging.error(f"Error getting balance for wallet '{name}': {str(e)}")
+            logging.error(f"Error getting balance: {str(e)}")
             raise
 
     def _calculate_sighash(self, tx: BitcoinTransaction, input_index: int, script: Script) -> bytes:
@@ -1075,7 +1092,8 @@ class WalletManager:
                 raise ValueError(f"Wallet '{name}' not found")
 
             network = wallet_data.get("network", "mainnet")
-            logging.info(f"Network: {network}")
+            address_type = wallet_data.get("address_type", "legacy")
+            logging.info(f"Network: {network}, Address Type: {address_type}")
             
             # Get RPC configuration
             rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
@@ -1084,36 +1102,68 @@ class WalletManager:
             rpc_port = int(os.getenv("BITCOIN_RPC_PORT", self.default_ports[network]))
             logging.info(f"RPC connection details - Host: {rpc_host}, Port: {rpc_port}")
 
-            # Create RPC connection
-            rpc_connection = AuthServiceProxy(
-                f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
-            )
+            # Create RPC connection and test it first
+            try:
+                rpc_connection = AuthServiceProxy(
+                    f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+                )
+                # Test connection with a simple call
+                rpc_connection.getblockcount()
+            except Exception as e:
+                if "Connection refused" in str(e):
+                    raise ValueError(
+                        "Bitcoin Core is not running or RPC is not properly configured.\n"
+                        "Please ensure:\n"
+                        "1. Bitcoin Core is running\n"
+                        "2. RPC is enabled in bitcoin.conf:\n"
+                        "   server=1\n"
+                        "   rpcuser=your_rpc_user\n"
+                        "   rpcpassword=your_rpc_password\n"
+                        "   rpcallowip=127.0.0.1\n"
+                        "3. Environment variables are set:\n"
+                        "   BITCOIN_RPC_USER\n"
+                        "   BITCOIN_RPC_PASSWORD\n"
+                        "   BITCOIN_RPC_HOST\n"
+                        "   BITCOIN_RPC_PORT"
+                    )
+                raise
+
             logging.info("RPC connection established")
 
-            # Get available UTXOs
-            utxos = self.database.get_utxos(name, include_frozen=False)
+            # Get all UTXOs first
+            all_utxos = self.get_utxos(name, include_frozen=True)
+            if not all_utxos:
+                raise ValueError("No UTXOs available")
+            
+            # Filter out frozen UTXOs
+            utxos = [utxo for utxo in all_utxos if not utxo.frozen]
+            frozen_count = len(all_utxos) - len(utxos)
+            if frozen_count > 0:
+                logging.info(f"Skipping {frozen_count} frozen UTXOs")
+            
             if not utxos:
-                raise ValueError("No available UTXOs found")
-            logging.info(f"Found {len(utxos)} available UTXOs")
+                raise ValueError("No unfrozen UTXOs available for spending")
 
             total_available = sum(utxo.amount for utxo in utxos)
             if total_available < amount:
-                raise ValueError(f"Insufficient funds. Available: {total_available}, Required: {amount}")
-            logging.info(f"Total available: {total_available}, Amount to send: {amount}")
+                raise ValueError(f"Insufficient unfrozen funds. Available: {total_available}, Required: {amount}")
+            logging.info(f"Total available from unfrozen UTXOs: {total_available}, Amount to send: {amount}")
 
             # Generate a change address
-            change_address = self.generate_address(name)
+            change_address = self.generate_address(name, quiet=True)
             logging.info(f"Generated change address: {change_address}")
 
             # Create raw inputs
             inputs = []
             input_amount = Decimal('0')
             input_addresses = []
+            selected_utxos = []
 
             # Add inputs until we have enough funds
             for utxo in utxos:
-                if input_amount >= amount:
-                    break
+                if utxo.frozen:
+                    logging.info(f"Skipping frozen UTXO: {utxo.txid}:{utxo.vout}")
+                    continue
                 
                 inputs.append({
                     "txid": utxo.txid,
@@ -1121,118 +1171,142 @@ class WalletManager:
                 })
                 input_amount += utxo.amount
                 input_addresses.append(utxo.address)
-                logging.info(f"Added input - TXID: {utxo.txid}, Vout: {utxo.vout}, Amount: {utxo.amount}")
+                selected_utxos.append(utxo)
+                logging.info(f"Added input - TXID: {utxo.txid}, Vout: {utxo.vout}, Amount: {utxo.amount}, Address: {utxo.address}")
+                
+                # Break if we have enough funds (considering potential fee)
+                if input_amount >= amount + Decimal('0.001'):  # Add buffer for fee
+                    break
+
+            if not inputs:
+                raise ValueError("No suitable UTXOs found for creating the transaction")
 
             # Create outputs
             outputs = {}
             
             # Payment output - convert Decimal to float with 8 decimal places
-            outputs[to_address] = round(float(amount), 8)
-            logging.info(f"Added payment output - Address: {to_address}, Amount: {amount}")
-            
-            # Add memo output if provided
-            if memo:
-                memo_bytes = memo.encode('utf-8').hex()
-                outputs["data"] = memo_bytes
-                logging.info(f"Added memo output - Memo: {memo}")
+            outputs[to_address] = float(amount)
 
-            # Add change output if needed
-            # Calculate fee in satoshis per byte
-            fee_rate = fee_rate if fee_rate else 5.0  # Default to 5 sat/vB
-            
-            # Estimate transaction size in bytes
-            estimated_size = (len(inputs) * 180) + (len(outputs) * 34) + 10  # rough estimation
-            
-            # Calculate fee in BTC: (size * sat/vB) / 100000000
-            fee = Decimal(str(estimated_size * fee_rate)) / Decimal('100000000')
-            logging.info(f"Fee calculation - Rate: {fee_rate} sat/vB, Size: {estimated_size} bytes, Fee: {fee} BTC")
-            
-            change_amount = input_amount - amount - fee
-            if change_amount > Decimal('0.00001'):  # Only add change if it's significant
-                outputs[change_address] = round(float(change_amount), 8)
-                logging.info(f"Added change output - Address: {change_address}, Amount: {change_amount}")
+            try:
+                # Create raw transaction
+                raw_tx = rpc_connection.createrawtransaction(inputs, outputs)
+                
+                # Get private keys for signing
+                private_keys = []
+                address_map = {}  # Map addresses to their indices
+                for i, addr in enumerate(wallet_data["addresses"]):
+                    address_map[addr] = i
 
-            # Create raw transaction
-            logging.info("Creating raw transaction")
-            raw_tx = rpc_connection.createrawtransaction(inputs, outputs)
-            logging.info(f"Raw transaction created: {raw_tx}")
-
-            # Get private keys for signing
-            private_keys = []
-            for addr in input_addresses:
-                logging.info(f"Getting private key for address: {addr}")
-                # Find the path for this address
-                path = None
-                for i, wallet_addr in enumerate(wallet_data["addresses"]):
-                    if addr == wallet_addr:
-                        path = self._get_derivation_path(network, wallet_data.get("address_type", "legacy"), i)
-                        logging.info(f"Found path for address {addr}: {path}")
-                        break
-
-                if not path:
-                    logging.warning(f"No path found for address {addr}")
-                    continue
-
-                # Get private key
-                logging.info("Decrypting mnemonic")
+                # Decrypt mnemonic once
                 mnemonic = self.fernet.decrypt(wallet_data["encrypted_mnemonic"].encode()).decode()
                 hd_wallet = HDWallet(symbol=BTC)
                 hd_wallet.from_mnemonic(mnemonic=mnemonic)
-                hd_wallet.clean_derivation()
-                hd_wallet.from_path(path)
-                private_key_hex = hd_wallet.private_key()
-                private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
-                wif = private_key.to_wif()
-                private_keys.append(wif)
-                logging.info(f"Added private key for address {addr}")
 
-            # Sign raw transaction
-            logging.info("Signing transaction")
-            signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
-            if not signed_tx["complete"]:
-                raise ValueError("Failed to sign transaction completely")
-            logging.info("Transaction signed successfully")
+                for addr in input_addresses:
+                    if addr not in address_map:
+                        raise ValueError(f"Address {addr} not found in wallet")
+                    
+                    # Get the correct index for this address
+                    addr_index = address_map[addr]
+                    path = self._get_derivation_path(network, address_type, addr_index)
+                    logging.info(f"Using path {path} for address {addr}")
 
-            # Send raw transaction
-            logging.info("Broadcasting transaction")
-            txid = rpc_connection.sendrawtransaction(signed_tx["hex"])
-            logging.info(f"Transaction broadcast successfully, TXID: {txid}")
+                    # Generate private key
+                    hd_wallet.clean_derivation()
+                    hd_wallet.from_path(path)
+                    private_key_hex = hd_wallet.private_key()
+                    private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
+                    wif = private_key.to_wif()
+                    private_keys.append(wif)
+                    logging.info(f"Generated private key for address {addr} (path: {path})")
 
-            # Store transaction in database
-            tx_obj = Transaction(
-                txid=txid,
-                timestamp=int(time.time()),
-                amount=amount,
-                fee=fee,
-                memo=memo,
-                from_addresses=input_addresses,
-                to_addresses=[to_address],
-                wallet_name=name,
-                change_address=change_address,
-                status="pending"
-            )
-            self.database.store_transaction(tx_obj)
-            logging.info("Transaction stored in database")
+                if not private_keys:
+                    raise ValueError("No private keys found for the input addresses")
 
-            # Update UTXO tracking
-            for utxo in utxos[:len(inputs)]:
-                self.database.remove_utxo(utxo.txid, utxo.vout)
-                logging.info(f"Removed spent UTXO: {utxo.txid}:{utxo.vout}")
+                logging.info(f"Generated {len(private_keys)} private keys for {len(input_addresses)} input addresses")
 
-            console.print(f"\n[green]Transaction sent successfully![/green]")
-            console.print(f"[yellow]TXID:[/yellow] {txid}")
-            console.print(f"[yellow]Amount:[/yellow] {amount} BTC")
-            console.print(f"[yellow]Fee:[/yellow] {fee} BTC")
-            if memo:
-                console.print(f"[yellow]Memo:[/yellow] {memo}")
+                # Sign the transaction
+                signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
+                if not signed_tx["complete"]:
+                    logging.error(f"Failed to sign transaction. Inputs: {json.dumps(inputs, indent=2)}")
+                    logging.error(f"Private keys count: {len(private_keys)}")
+                    logging.error(f"Input addresses: {input_addresses}")
+                    logging.error(f"Wallet addresses: {wallet_data['addresses']}")
+                    raise ValueError(
+                        "Failed to sign transaction. This could be due to:\n"
+                        "1. Incorrect private keys\n"
+                        "2. Missing private keys\n"
+                        "3. Incompatible address types\n"
+                        "Please check the wallet configuration and try again."
+                    )
 
-            return txid
+                # Get the size of the signed transaction
+                tx_size = len(signed_tx["hex"]) // 2  # Convert from hex to bytes
+                
+                # Calculate minimum fee based on size and fee rate
+                fee_rate = fee_rate if fee_rate is not None else 5.0  # Default to 5 sat/vB
+                min_fee_sats = int(tx_size * fee_rate)
+                min_fee_btc = Decimal(str(min_fee_sats)) / Decimal('100000000')
+                
+                # Calculate change amount
+                change_amount = input_amount - amount - min_fee_btc
+                
+                # If we have change worth sending (more than dust), add it to outputs
+                if change_amount > Decimal('0.00000546'):  # 546 sats dust limit
+                    outputs[change_address] = float(change_amount)
+                else:
+                    # If change is dust, add it to the fee
+                    min_fee_btc += change_amount
+                
+                # Recreate transaction with proper fee
+                raw_tx = rpc_connection.createrawtransaction(inputs, outputs)
+                signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
+                if not signed_tx["complete"]:
+                    raise ValueError("Failed to sign final transaction")
+
+                # Send the transaction
+                txid = rpc_connection.sendrawtransaction(signed_tx["hex"])
+                logging.info(f"Transaction sent successfully: {txid}")
+
+                # Store transaction record
+                tx_obj = Transaction(
+                    txid=txid,
+                    timestamp=int(time.time()),
+                    amount=amount,
+                    fee=min_fee_btc,
+                    memo=memo,
+                    from_addresses=input_addresses,
+                    to_addresses=[to_address],
+                    wallet_name=name,
+                    change_address=change_address if change_amount > Decimal('0.00000546') else None,
+                    status="pending"
+                )
+                self.database.store_transaction(tx_obj)
+
+                # Update UTXO tracking - only remove the UTXOs we actually used
+                for utxo in selected_utxos:
+                    self.database.remove_utxo(utxo.txid, utxo.vout)
+                    logging.info(f"Removed spent UTXO: {utxo.txid}:{utxo.vout}")
+
+                console.print(f"\n[green]Transaction sent successfully![/green]")
+                console.print(f"[yellow]TXID:[/yellow] {txid}")
+                console.print(f"[yellow]Amount:[/yellow] {amount} BTC")
+                console.print(f"[yellow]Fee:[/yellow] {min_fee_btc} BTC ({min_fee_sats} sats, {fee_rate} sat/vB)")
+                if memo:
+                    console.print(f"[yellow]Memo:[/yellow] {memo}")
+
+                return txid
+
+            except Exception as e:
+                if "Connection refused" in str(e):
+                    raise ValueError("Lost connection to Bitcoin Core. Please ensure Bitcoin Core is running and RPC is properly configured.")
+                raise
 
         except Exception as e:
-            logging.error(f"Error sending bitcoin: {str(e)}", exc_info=True)
+            logging.error(f"Error sending bitcoin: {str(e)}")
             raise
 
-    def create_and_freeze_utxo(self, name: str, amount: Decimal, memo: Optional[str] = None) -> str:
+    def create_and_freeze_utxo(self, name: str, amount: Decimal, memo: Optional[str] = None, fee_rate: float = 1.0) -> str:
         """Create a UTXO with specific value and freeze it"""
         try:
             name = self._validate_wallet_name(name)
@@ -1240,64 +1314,253 @@ class WalletManager:
             if not wallet_data:
                 raise ValueError(f"Wallet '{name}' not found")
 
-            # Generate a new address for the UTXO
-            address = self.generate_address(name)
-
-            # Send bitcoin to the new address
-            txid = self.send_bitcoin(name, address, amount, memo=memo)
-
-            # Wait for one confirmation
-            self._wait_for_confirmation(txid)
-
-            # Get the output index (vout) for the new UTXO
+            # Check RPC connection first
             network = wallet_data.get("network", "mainnet")
             rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
             rpc_password = os.getenv("BITCOIN_RPC_PASSWORD", "pass")
             rpc_host = os.getenv("BITCOIN_RPC_HOST", "127.0.0.1")
             rpc_port = int(os.getenv("BITCOIN_RPC_PORT", self.default_ports[network]))
 
-            rpc_connection = AuthServiceProxy(
-                f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
-            )
+            try:
+                rpc_connection = AuthServiceProxy(
+                    f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+                )
+                # Test connection with a simple call
+                block_count = rpc_connection.getblockcount()
+                logging.info(f"Connected to Bitcoin Core (block height: {block_count})")
+            except Exception as e:
+                if "Connection refused" in str(e):
+                    raise ValueError(
+                        "Bitcoin Core is not running or RPC is not properly configured.\n"
+                        "Please ensure:\n"
+                        "1. Bitcoin Core is running (bitcoind -regtest)\n"
+                        "2. RPC is enabled in bitcoin.conf:\n"
+                        "   server=1\n"
+                        "   regtest=1\n"
+                        "   rpcuser=your_rpc_user\n"
+                        "   rpcpassword=your_rpc_password\n"
+                        "   rpcallowip=127.0.0.1\n"
+                        "3. Environment variables are set:\n"
+                        "   BITCOIN_RPC_USER=your_rpc_user\n"
+                        "   BITCOIN_RPC_PASSWORD=your_rpc_password\n"
+                        "   BITCOIN_RPC_HOST=127.0.0.1\n"
+                        "   BITCOIN_RPC_PORT=18443"
+                    )
+                raise
 
-            tx = rpc_connection.getrawtransaction(txid, True)
-            vout = None
-            for i, output in enumerate(tx["vout"]):
-                if output["scriptPubKey"]["addresses"][0] == address:
-                    vout = i
+            # Get all available UTXOs
+            all_utxos = self.get_utxos(name, include_frozen=True)
+            if not all_utxos:
+                raise ValueError("No UTXOs available")
+
+            # Filter out frozen and immature UTXOs
+            available_utxos = []
+            for utxo in all_utxos:
+                if utxo.frozen:
+                    logging.info(f"Skipping frozen UTXO: {utxo.txid}:{utxo.vout}")
+                    continue
+                if utxo.is_coinbase and (utxo.confirmations or 0) < 100:
+                    logging.info(f"Skipping immature coinbase UTXO: {utxo.txid}:{utxo.vout}")
+                    continue
+                available_utxos.append(utxo)
+
+            if not available_utxos:
+                raise ValueError("No spendable UTXOs available")
+
+            # Sort UTXOs by amount in descending order
+            available_utxos.sort(key=lambda x: x.amount, reverse=True)
+
+            # Calculate minimum required amount (including estimated fee)
+            estimated_size = 180 + 34 + 10  # One input + one output + overhead
+            min_fee = Decimal(str(estimated_size * fee_rate)) / Decimal('100000000')
+            required_amount = amount + min_fee
+
+            # Select UTXOs (try to minimize the number of inputs)
+            selected_utxos = []
+            total_input = Decimal('0')
+
+            # First try to find a single UTXO that's close to our target
+            for utxo in available_utxos:
+                if utxo.amount >= required_amount and utxo.amount <= required_amount * Decimal('1.5'):
+                    selected_utxos = [utxo]
+                    total_input = utxo.amount
                     break
 
-            if vout is None:
-                raise ValueError("Could not find the output in transaction")
+            # If no suitable single UTXO found, use multiple UTXOs
+            if not selected_utxos:
+                for utxo in available_utxos:
+                    selected_utxos.append(utxo)
+                    total_input += utxo.amount
+                    estimated_size = (len(selected_utxos) * 180) + 34 + 10
+                    min_fee = Decimal(str(estimated_size * fee_rate)) / Decimal('100000000')
+                    if total_input >= amount + min_fee:
+                        break
 
-            # Create and store the frozen UTXO
-            utxo = UTXO(
-                txid=txid,
-                vout=vout,
-                amount=amount,
-                address=address,
-                frozen=True,
-                memo=memo,
-                wallet_name=name
-            )
-            self.database.store_utxo(utxo)
+            if not selected_utxos:
+                raise ValueError("Insufficient funds to create UTXO")
 
-            console.print(f"\n[green]Created and froze UTXO successfully![/green]")
-            console.print(f"[yellow]TXID:[/yellow] {txid}")
-            console.print(f"[yellow]Vout:[/yellow] {vout}")
-            console.print(f"[yellow]Amount:[/yellow] {amount} BTC")
-            console.print(f"[yellow]Address:[/yellow] {address}")
-            if memo:
-                console.print(f"[yellow]Memo:[/yellow] {memo}")
+            # Generate a new address for the UTXO
+            freeze_address = self.generate_address(name, quiet=True)
+            logging.info(f"Generated freeze address: {freeze_address}")
 
-            return txid
+            # Create inputs
+            inputs = []
+            input_addresses = []
+            for utxo in selected_utxos:
+                inputs.append({
+                    "txid": utxo.txid,
+                    "vout": utxo.vout
+                })
+                input_addresses.append(utxo.address)
+                logging.info(f"Using input UTXO: {utxo.txid}:{utxo.vout} ({utxo.amount} BTC) from {utxo.address}")
+
+            # Calculate actual fee based on final transaction size
+            tx_size = (len(inputs) * 180) + 34 + 10
+            fee = Decimal(str(tx_size * fee_rate)) / Decimal('100000000')
+            logging.info(f"Calculated fee: {fee} BTC for {tx_size} bytes at {fee_rate} sat/vB")
+
+            # Create outputs
+            outputs = {
+                freeze_address: float(amount)
+            }
+
+            # Add change output if needed
+            change_amount = total_input - amount - fee
+            if change_amount > Decimal('0.00000546'):  # More than dust
+                change_address = self.generate_address(name, quiet=True)
+                outputs[change_address] = float(change_amount)
+                logging.info(f"Adding change output: {change_amount} BTC to {change_address}")
+
+            # Create and sign transaction
+            try:
+                raw_tx = rpc_connection.createrawtransaction(inputs, outputs)
+                logging.info("Created raw transaction")
+
+                # Get private keys for signing
+                private_keys = []
+                address_indices = {}  # Map addresses to all their indices
+                
+                # Build a map of all addresses and their indices
+                for i, addr in enumerate(wallet_data["addresses"]):
+                    if addr not in address_indices:
+                        address_indices[addr] = []
+                    address_indices[addr].append(i)
+
+                # Decrypt mnemonic once
+                mnemonic = self.fernet.decrypt(wallet_data["encrypted_mnemonic"].encode()).decode()
+                hd_wallet = HDWallet(symbol=BTC)
+                hd_wallet.from_mnemonic(mnemonic=mnemonic)
+
+                # Try all possible derivation paths for each input address
+                for addr in input_addresses:
+                    if addr not in address_indices:
+                        raise ValueError(f"Address {addr} not found in wallet")
+                    
+                    # Get all indices for this address
+                    indices = address_indices[addr]
+                    logging.info(f"Found {len(indices)} possible indices for address {addr}")
+                    
+                    key_found = False
+                    # Try each possible derivation path
+                    for idx in indices:
+                        path = self._get_derivation_path(network, wallet_data.get("address_type", "legacy"), idx)
+                        logging.info(f"Trying path {path} for address {addr}")
+
+                        # Generate private key
+                        hd_wallet.clean_derivation()
+                        hd_wallet.from_path(path)
+                        private_key_hex = hd_wallet.private_key()
+                        private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
+                        
+                        # Verify this private key corresponds to the address
+                        pubkey = private_key.get_public_key()
+                        derived_addr = pubkey.get_address().to_string()
+                        
+                        if derived_addr == addr:
+                            wif = private_key.to_wif()
+                            private_keys.append(wif)
+                            logging.info(f"Found matching private key for address {addr} at path {path}")
+                            key_found = True
+                            break
+                    
+                    if not key_found:
+                        raise ValueError(f"Could not find private key for address {addr}")
+
+                if len(private_keys) != len(input_addresses):
+                    raise ValueError(f"Could not find all private keys. Found {len(private_keys)} of {len(input_addresses)} required keys")
+
+                # Sign transaction
+                signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
+                if not signed_tx["complete"]:
+                    logging.error(f"Failed to sign transaction. Inputs: {json.dumps(inputs, indent=2)}")
+                    logging.error(f"Private keys count: {len(private_keys)}")
+                    logging.error(f"Input addresses: {input_addresses}")
+                    logging.error(f"Wallet addresses: {wallet_data['addresses']}")
+                    
+                    if "errors" in signed_tx:
+                        for error in signed_tx["errors"]:
+                            logging.error(f"Signing error: {json.dumps(error, indent=2)}")
+                    
+                    raise ValueError("Failed to sign transaction")
+
+                # Send transaction
+                txid = rpc_connection.sendrawtransaction(signed_tx["hex"])
+                logging.info(f"Transaction sent: {txid}")
+
+                # Create and store the frozen UTXO
+                frozen_utxo = UTXO(
+                    txid=txid,
+                    vout=0,  # The frozen output is always first
+                    amount=amount,
+                    address=freeze_address,
+                    frozen=True,
+                    memo=memo,
+                    wallet_name=name
+                )
+                self.database.store_utxo(frozen_utxo)
+                logging.info(f"Stored frozen UTXO: {txid}:0")
+
+                # Remove spent UTXOs
+                for utxo in selected_utxos:
+                    self.database.remove_utxo(utxo.txid, utxo.vout)
+                    logging.info(f"Removed spent UTXO: {utxo.txid}:{utxo.vout}")
+
+                # Store transaction record
+                tx_obj = Transaction(
+                    txid=txid,
+                    timestamp=int(time.time()),
+                    amount=amount,
+                    fee=fee,
+                    memo=f"Created frozen UTXO: {memo}" if memo else "Created frozen UTXO",
+                    from_addresses=input_addresses,
+                    to_addresses=[freeze_address],
+                    wallet_name=name,
+                    change_address=change_address if change_amount > Decimal('0.00000546') else None,
+                    status="pending"
+                )
+                self.database.store_transaction(tx_obj)
+
+                console.print(f"\n[green]Created and froze UTXO successfully![/green]")
+                console.print(f"[yellow]TXID:[/yellow] {txid}")
+                console.print(f"[yellow]Amount:[/yellow] {amount} BTC")
+                console.print(f"[yellow]Fee:[/yellow] {fee} BTC")
+                console.print(f"[yellow]Address:[/yellow] {freeze_address}")
+                if memo:
+                    console.print(f"[yellow]Memo:[/yellow] {memo}")
+
+                return txid
+
+            except Exception as e:
+                if "Connection refused" in str(e):
+                    raise ValueError("Lost connection to Bitcoin Core. Please ensure Bitcoin Core is running and RPC is properly configured.")
+                raise
 
         except Exception as e:
             logging.error(f"Error creating frozen UTXO: {str(e)}")
             raise
 
-    def _wait_for_confirmation(self, txid: str, confirmations: int = 1):
-        """Wait for a transaction to get the required number of confirmations"""
+    def _wait_for_confirmation(self, txid: str, confirmations: int = 1, timeout: int = 60):
+        """Wait for a transaction to get the required number of confirmations with timeout"""
         try:
             network = self.network
             rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
@@ -1309,18 +1572,295 @@ class WalletManager:
                 f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
             )
 
-            while True:
+            start_time = time.time()
+            while time.time() - start_time < timeout:
                 try:
                     tx = rpc_connection.getrawtransaction(txid, True)
                     if "confirmations" in tx and tx["confirmations"] >= confirmations:
-                        break
-                except Exception:
-                    pass
+                        return True
+                except Exception as e:
+                    if "No such mempool or blockchain transaction" in str(e):
+                        # Transaction not found yet, continue waiting
+                        pass
+                    else:
+                        logging.error(f"Error checking transaction: {str(e)}")
+                        raise
+                
+                # If in regtest mode, warn about mining blocks
+                if network == "regtest" and time.time() - start_time > 5:
+                    console.print("[yellow]Waiting for confirmation. In regtest mode, you need to mine blocks manually.[/yellow]")
+                    console.print("[yellow]Use bitcoin-cli generatetoaddress 1 <address> to mine a block.[/yellow]")
+                    return False
+                
                 time.sleep(1)  # Wait for 1 second before checking again
+            
+            # If we reach here, we timed out
+            logging.warning(f"Timeout waiting for confirmation of transaction {txid}")
+            return False
 
         except Exception as e:
             logging.error(f"Error waiting for confirmation: {str(e)}")
             raise
+
+    def get_utxos(self, wallet_name: str, include_frozen: bool = False) -> List[UTXO]:
+        """Get all UTXOs for a wallet"""
+        try:
+            network = self.network
+            utxos = self.database.get_utxos(wallet_name, include_frozen=include_frozen)
+            
+            # Try to establish RPC connection first
+            try:
+                rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
+                rpc_password = os.getenv("BITCOIN_RPC_PASSWORD", "pass")
+                rpc_host = os.getenv("BITCOIN_RPC_HOST", "127.0.0.1")
+                rpc_port = int(os.getenv("BITCOIN_RPC_PORT", self.default_ports[network]))
+
+                rpc_connection = AuthServiceProxy(
+                    f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+                )
+                
+                # Test connection with a simple call
+                rpc_connection.getblockcount()
+                
+                # If we get here, RPC is working
+                required_depth = 100  # Both regtest and mainnet require 100 blocks
+                mature_utxos = []
+                
+                for utxo in utxos:
+                    try:
+                        # Get transaction details
+                        tx = rpc_connection.getrawtransaction(utxo.txid, True)
+                        
+                        # Check if it's a coinbase transaction
+                        is_coinbase = any(vin.get("coinbase") for vin in tx.get("vin", []))
+                        confirmations = tx.get("confirmations", 0)
+                        
+                        # Update UTXO with confirmation info
+                        utxo.is_coinbase = is_coinbase
+                        utxo.confirmations = confirmations
+                        
+                        # If it's coinbase, check maturity
+                        if is_coinbase and confirmations < required_depth:
+                            logging.info(f"Skipping immature coinbase UTXO {utxo.txid}:{utxo.vout} (depth: {confirmations})")
+                            continue
+                        
+                        mature_utxos.append(utxo)
+                    except Exception as e:
+                        if "No such mempool or blockchain transaction" in str(e):
+                            logging.info(f"UTXO {utxo.txid} not found in blockchain or mempool, skipping")
+                            continue
+                        else:
+                            logging.error(f"Error checking UTXO {utxo.txid}: {str(e)}")
+                            # Still include the UTXO but without confirmation info
+                            mature_utxos.append(utxo)
+                
+                return mature_utxos
+                
+            except Exception as e:
+                # If RPC connection fails, return UTXOs without confirmation info
+                logging.warning(f"RPC connection failed: {str(e)}")
+                return utxos
+
+        except Exception as e:
+            logging.error(f"Error getting UTXOs: {str(e)}")
+            return []
+
+    def consolidate_utxos(self, name: str, fee_rate: float = 5.0) -> Optional[str]:
+        """Consolidate all unfrozen UTXOs into a single UTXO"""
+        try:
+            name = self._validate_wallet_name(name)
+            wallet_data = self._load_wallet(name)
+            if not wallet_data:
+                raise ValueError(f"Wallet '{name}' not found")
+
+            # Get all unfrozen UTXOs
+            all_utxos = self.get_utxos(name, include_frozen=True)  # Get all UTXOs to check frozen status
+            if not all_utxos:
+                raise ValueError("No UTXOs available")
+
+            # Filter out frozen UTXOs
+            utxos = [utxo for utxo in all_utxos if not utxo.frozen]
+            frozen_count = len(all_utxos) - len(utxos)
+            
+            if frozen_count > 0:
+                logging.info(f"Skipping {frozen_count} frozen UTXOs")
+            
+            if not utxos:
+                raise ValueError("No unfrozen UTXOs available for consolidation")
+            
+            if len(utxos) < 2:
+                raise ValueError("Need at least 2 unfrozen UTXOs to consolidate")
+
+            logging.info(f"Consolidating {len(utxos)} unfrozen UTXOs")
+            for utxo in utxos:
+                logging.info(f"Including UTXO: {utxo.txid}:{utxo.vout} ({utxo.amount} BTC) at address {utxo.address}")
+
+            network = wallet_data.get("network", "mainnet")
+            address_type = wallet_data.get("address_type", "legacy")
+            logging.info(f"Network: {network}, Address Type: {address_type}")
+            
+            # Get RPC configuration
+            rpc_user = os.getenv("BITCOIN_RPC_USER", "user")
+            rpc_password = os.getenv("BITCOIN_RPC_PASSWORD", "pass")
+            rpc_host = os.getenv("BITCOIN_RPC_HOST", "127.0.0.1")
+            rpc_port = int(os.getenv("BITCOIN_RPC_PORT", self.default_ports[network]))
+
+            # Create RPC connection
+            rpc_connection = AuthServiceProxy(
+                f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+            )
+
+            # Calculate total amount
+            total_amount = sum(utxo.amount for utxo in utxos)
+            logging.info(f"Total amount to consolidate: {total_amount} BTC")
+            
+            # Generate a new address for the consolidated UTXO
+            consolidated_address = self.generate_address(name, quiet=True)
+            logging.info(f"Generated consolidated address: {consolidated_address}")
+
+            # Create inputs from unfrozen UTXOs
+            inputs = []
+            input_addresses = []
+            for utxo in utxos:
+                inputs.append({
+                    "txid": utxo.txid,
+                    "vout": utxo.vout
+                })
+                input_addresses.append(utxo.address)
+
+            # Estimate transaction size (simplified)
+            estimated_size = (len(inputs) * 180) + 34 + 10  # inputs + 1 output + overhead
+            
+            # Calculate fee
+            fee = Decimal(str(estimated_size * fee_rate)) / Decimal('100000000')
+            logging.info(f"Estimated fee: {fee} BTC (size: {estimated_size} bytes, rate: {fee_rate} sat/vB)")
+            
+            # Create output (total amount minus fee)
+            consolidated_amount = total_amount - fee
+            if consolidated_amount <= 0:
+                raise ValueError(f"Fee would exceed total amount. Try a lower fee rate or consolidate larger UTXOs")
+
+            outputs = {
+                consolidated_address: float(consolidated_amount)
+            }
+
+            # Create raw transaction
+            raw_tx = rpc_connection.createrawtransaction(inputs, outputs)
+            
+            # Get private keys for signing
+            private_keys = []
+            address_indices = {}  # Map addresses to all their indices
+            
+            # Build a map of all addresses and their indices
+            for i, addr in enumerate(wallet_data["addresses"]):
+                if addr not in address_indices:
+                    address_indices[addr] = []
+                address_indices[addr].append(i)
+
+            # Decrypt mnemonic once
+            mnemonic = self.fernet.decrypt(wallet_data["encrypted_mnemonic"].encode()).decode()
+            hd_wallet = HDWallet(symbol=BTC)
+            hd_wallet.from_mnemonic(mnemonic=mnemonic)
+
+            # Try all possible derivation paths for each input address
+            for addr in input_addresses:
+                if addr not in address_indices:
+                    raise ValueError(f"Address {addr} not found in wallet")
+                
+                # Get all indices for this address
+                indices = address_indices[addr]
+                logging.info(f"Found {len(indices)} possible indices for address {addr}")
+                
+                # Try each possible derivation path
+                for idx in indices:
+                    path = self._get_derivation_path(network, address_type, idx)
+                    logging.info(f"Trying path {path} for address {addr}")
+
+                    # Generate private key
+                    hd_wallet.clean_derivation()
+                    hd_wallet.from_path(path)
+                    private_key_hex = hd_wallet.private_key()
+                    private_key = PrivateKey(secret_exponent=int(private_key_hex, 16))
+                    wif = private_key.to_wif()
+                    
+                    # Verify this private key corresponds to the address
+                    pubkey = private_key.get_public_key()
+                    derived_addr = pubkey.get_address().to_string()
+                    
+                    if derived_addr == addr:
+                        private_keys.append(wif)
+                        logging.info(f"Found matching private key for address {addr} at path {path}")
+                        break
+                    else:
+                        logging.info(f"Path {path} did not match address {addr}")
+
+            if len(private_keys) != len(input_addresses):
+                raise ValueError(f"Could not find all private keys. Found {len(private_keys)} of {len(input_addresses)} required keys")
+
+            logging.info(f"Generated {len(private_keys)} private keys for {len(input_addresses)} input addresses")
+
+            # Sign transaction
+            signed_tx = rpc_connection.signrawtransactionwithkey(raw_tx, private_keys)
+            if not signed_tx["complete"]:
+                logging.error(f"Failed to sign consolidation transaction. Inputs: {json.dumps(inputs, indent=2)}")
+                logging.error(f"Private keys count: {len(private_keys)}")
+                logging.error(f"Input addresses: {input_addresses}")
+                logging.error(f"Wallet addresses: {wallet_data['addresses']}")
+                
+                # Get more detailed error information
+                if "errors" in signed_tx:
+                    for error in signed_tx["errors"]:
+                        logging.error(f"Signing error: {json.dumps(error, indent=2)}")
+                
+                raise ValueError("Failed to sign consolidation transaction")
+
+            # Send transaction
+            txid = rpc_connection.sendrawtransaction(signed_tx["hex"])
+            logging.info(f"Consolidation transaction sent: {txid}")
+
+            # Update UTXO tracking - only remove the unfrozen UTXOs that were consolidated
+            for utxo in utxos:
+                self.database.remove_utxo(utxo.txid, utxo.vout)
+                logging.info(f"Removed spent UTXO from database: {utxo.txid}:{utxo.vout}")
+
+            # Store the new consolidated UTXO
+            consolidated_utxo = UTXO(
+                txid=txid,
+                vout=0,  # First and only output
+                amount=consolidated_amount,
+                address=consolidated_address,
+                frozen=False,
+                wallet_name=name
+            )
+            self.database.store_utxo(consolidated_utxo)
+            logging.info(f"Stored new consolidated UTXO: {txid}:0 ({consolidated_amount} BTC)")
+
+            # Store transaction record
+            tx_obj = Transaction(
+                txid=txid,
+                timestamp=int(time.time()),
+                amount=consolidated_amount,
+                fee=fee,
+                memo="UTXO Consolidation",
+                from_addresses=input_addresses,
+                to_addresses=[consolidated_address],
+                wallet_name=name,
+                change_address=consolidated_address,
+                status="pending"
+            )
+            self.database.store_transaction(tx_obj)
+
+            console.print(f"\n[green]Successfully consolidated {len(utxos)} UTXOs![/green]")
+            console.print(f"[yellow]TXID:[/yellow] {txid}")
+            console.print(f"[yellow]Total Amount:[/yellow] {consolidated_amount} BTC")
+            console.print(f"[yellow]Fee:[/yellow] {fee} BTC")
+            console.print(f"[yellow]Consolidated Address:[/yellow] {consolidated_address}")
+
+            return txid
+
+        except Exception as e:
+            logging.error(f"Error consolidating UTXOs: {str(e)}")
+            raise ValueError(f"Failed to consolidate UTXOs: {str(e)}")
 
 # Create a global instance
 wallet_manager = WalletManager() 
