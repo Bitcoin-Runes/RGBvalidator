@@ -61,6 +61,17 @@ A robust RGB validation software with advanced Bitcoin smart contract support an
 - Secure key management
 - Address validation
 
+### P2P Network Features
+- **Distributed Hash Table (DHT)**:
+  - Peer discovery
+  - Decentralized network topology
+  - Automatic peer routing
+- **Gossip Protocol**:
+  - Wallet state synchronization
+  - Real-time updates
+  - Efficient message propagation
+  - Topic-based pub/sub
+
 ## Quick Start
 
 ### Docker Installation (Recommended)
@@ -359,4 +370,44 @@ docker-compose restart
 ```bash
 docker-compose down -v
 docker-compose up -d
+```
+
+## Experimental Features
+
+### DHT and Gossip Protocol Testing
+
+The `cubaan` command allows you to experiment with DHT and gossip protocol functionality:
+
+1. Start the first instance:
+```bash
+# With Docker:
+docker-compose exec validator python -m validator cubaan my_wallet --port 8000
+
+# Without Docker:
+python -m validator cubaan my_wallet --port 8000
+```
+
+2. Start the second instance (in a different terminal):
+```bash
+# Get the multiaddr from the first instance output and use it here
+# With Docker:
+docker-compose exec validator python -m validator cubaan other_wallet --port 8001 --peer /ip4/127.0.0.1/tcp/8000/p2p/QmHash...
+
+# Without Docker:
+python -m validator cubaan other_wallet --port 8001 --peer /ip4/127.0.0.1/tcp/8000/p2p/QmHash...
+```
+
+The instances will:
+- Automatically discover each other using DHT
+- Share wallet states using gossip protocol
+- Broadcast updates every 10 seconds
+- Display received messages from other peers
+
+To test different networks:
+```bash
+# Use custom topic for specific network testing
+python -m validator cubaan my_wallet --port 8000 --topic testnet-sync
+
+# Connect to specific peer with custom topic
+python -m validator cubaan other_wallet --port 8001 --peer /ip4/127.0.0.1/tcp/8000/p2p/QmHash... --topic testnet-sync
 ```

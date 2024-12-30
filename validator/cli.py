@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 import typer
 from decimal import Decimal
 import json
@@ -8,6 +8,16 @@ from rich.text import Text
 from rich.panel import Panel
 from rich import box
 from .wallet import wallet_manager
+import asyncio
+import click
+import time
+import os
+import signal
+from kademlia.network import Server as KademliaServer
+import hashlib
+import aiohttp
+from aiohttp import web
+import random
 
 app = typer.Typer()
 wallet = typer.Typer()
@@ -861,3 +871,325 @@ def list(wallet_name: str, collection_name: Optional[str] = None):
         
     except Exception as e:
         console.print(f"[red]❌ Error: {str(e)}[/red]") 
+
+@app.command()
+def cubaan(
+    wallet_name: str,
+    port: int = typer.Option(8000, help='Port to listen on'),
+    is_bootstrap: bool = typer.Option(False, help='Run as a bootstrap node'),
+    bootstrap_node: Optional[str] = typer.Option(None, help='Bootstrap node address (host:port)'),
+    topic: str = typer.Option('wallet-sync', help='Topic for gossip protocol')
+):
+    """Experiment with DHT using the selected wallet. Can run as a bootstrap node or connect to an existing one."""
+    try:
+        # Get wallet instance
+        wallet = wallet_manager.get_wallet(wallet_name)
+        if not wallet:
+            console.print(f"[red]Wallet {wallet_name} not found[/red]")
+            return
+
+        if is_bootstrap and bootstrap_node:
+            console.print("[red]Error: Cannot be both a bootstrap node and connect to a bootstrap node[/red]")
+            return
+
+        # Run the async function
+        asyncio.run(_cubaan_async(wallet, wallet_name, port, is_bootstrap, bootstrap_node, topic))
+
+    except Exception as e:
+        console.print(f"[red]Error in cubaan: {str(e)}[/red]")
+
+async def _cubaan_async(wallet, wallet_name: str, port: int, is_bootstrap: bool, bootstrap_node: Optional[str], topic: str):
+    """Async implementation of cubaan command"""
+    try:
+        # Create Kademlia DHT node
+        dht_node = KademliaServer()
+        await dht_node.listen(port)
+        
+        # Generate a unique node ID based on wallet name and port
+        node_id = hashlib.sha256(f"{wallet_name}:{port}".encode()).hexdigest()[:16]
+        
+        if is_bootstrap:
+            console.print(f"[green]Starting as bootstrap node[/green]")
+            console.print(f"[green]Bootstrap Node ID: {node_id}[/green]")
+            console.print(f"[green]Listening on port: {port}[/green]")
+            console.print(f"[yellow]Other nodes can connect using: localhost:{port}[/yellow]")
+        else:
+            console.print(f"[green]Node started with ID: {node_id}[/green]")
+            console.print(f"[green]Listening on port: {port}[/green]")
+
+        # If this is not a bootstrap node, connect to the bootstrap node
+        if bootstrap_node:
+            console.print(f"[cyan]Attempting to connect to bootstrap node: {bootstrap_node}[/cyan]")
+            try:
+                host, bootstrap_port = bootstrap_node.split(':')
+                await dht_node.bootstrap([(host, int(bootstrap_port))])
+                console.print(f"[green]Successfully connected to bootstrap node: {bootstrap_node}[/green]")
+            except Exception as e:
+                console.print(f"[red]Failed to connect to bootstrap node: {str(e)}[/red]")
+                console.print("[yellow]Continuing as a standalone node...[/yellow]")
+
+        # Periodic wallet state broadcast and peer discovery
+        async def broadcast_wallet_state():
+            while True:
+                try:
+                    # Get wallet state to share
+                    wallet_state = {
+                        'node_id': node_id,
+                        'wallet_name': wallet_name,
+                        'network': wallet.network,
+                        'balance': wallet.get_balance(),
+                        'timestamp': time.time(),
+                        'is_bootstrap': is_bootstrap
+                    }
+                    
+                    # Store state in DHT
+                    await dht_node.set(f"wallet:{node_id}", json.dumps(wallet_state))
+                    console.print(f"\n[cyan]Stored wallet state in DHT: {wallet_state}[/cyan]")
+
+                    # Get and display known peers from DHT
+                    try:
+                        peers = await dht_node.get("peers")
+                        if peers:
+                            peers = json.loads(peers)
+                            console.print(f"[yellow]Known peers: {peers}[/yellow]")
+                            
+                            # Get other wallet states
+                            for peer in peers:
+                                if peer != node_id:
+                                    peer_state = await dht_node.get(f"wallet:{peer}")
+                                    if peer_state:
+                                        state = json.loads(peer_state)
+                                        role = "Bootstrap Node" if state.get('is_bootstrap') else "Peer"
+                                        console.print(f"[blue]{role} {peer} state: {state}[/blue]")
+                    except Exception as e:
+                        console.print(f"[red]Error getting peer information: {str(e)}[/red]")
+                    
+                except Exception as e:
+                    console.print(f"[red]Error broadcasting state: {str(e)}[/red]")
+                
+                await asyncio.sleep(10)  # Update every 10 seconds
+
+        # Start broadcasting
+        broadcast_task = asyncio.create_task(broadcast_wallet_state())
+
+        # Store this node in peers list
+        try:
+            peers = await dht_node.get("peers")
+            if peers:
+                peers = json.loads(peers)
+                if node_id not in peers:
+                    peers.append(node_id)
+            else:
+                peers = [node_id]
+            await dht_node.set("peers", json.dumps(peers))
+            
+            if is_bootstrap:
+                await dht_node.set("bootstrap_node", node_id)
+        except Exception as e:
+            console.print(f"[red]Error storing peer information: {str(e)}[/red]")
+            await dht_node.set("peers", json.dumps([node_id]))
+            if is_bootstrap:
+                await dht_node.set("bootstrap_node", node_id)
+
+        # Handle graceful shutdown
+        def signal_handler():
+            broadcast_task.cancel()
+            asyncio.create_task(dht_node.stop())
+
+        # Register signal handlers
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
+
+        # Keep the node running
+        try:
+            while True:
+                cmd = input("\nEnter 'q' to quit, 'p' to print current DHT state, or 'b' to show bootstrap info: ")
+                if cmd.lower() == 'q':
+                    break
+                elif cmd.lower() == 'p':
+                    peers = await dht_node.get("peers")
+                    if peers:
+                        peers = json.loads(peers)
+                        console.print(f"\n[yellow]Known peers: {peers}[/yellow]")
+                        for peer in peers:
+                            state = await dht_node.get(f"wallet:{peer}")
+                            if state:
+                                state_data = json.loads(state)
+                                role = "Bootstrap Node" if state_data.get('is_bootstrap') else "Peer"
+                                console.print(f"[blue]{role} {peer} state: {state_data}[/blue]")
+                elif cmd.lower() == 'b':
+                    bootstrap_id = await dht_node.get("bootstrap_node")
+                    if bootstrap_id:
+                        bootstrap_state = await dht_node.get(f"wallet:{bootstrap_id}")
+                        if bootstrap_state:
+                            console.print(f"[green]Bootstrap Node Information:[/green]")
+                            console.print(f"[blue]{json.loads(bootstrap_state)}[/blue]")
+                    else:
+                        console.print("[yellow]No bootstrap node information found[/yellow]")
+                await asyncio.sleep(1)
+        finally:
+            signal_handler()
+
+    except Exception as e:
+        console.print(f"[red]Error in cubaan: {str(e)}[/red]")
+    finally:
+        # Cleanup
+        try:
+            await dht_node.stop()
+        except:
+            pass
+
+@app.command()
+def lalai(
+    wallet_name: str,
+    port: int = typer.Option(8000, help='Port to listen on'),
+    peers: str = typer.Option(None, help='Comma-separated list of peer addresses (e.g., localhost:8001,localhost:8002)'),
+    topic: str = typer.Option('wallet-sync', help='Topic for gossip protocol')
+):
+    """Test gossip protocol functionality with the selected wallet."""
+    try:
+        # Get wallet instance
+        wallet = wallet_manager.get_wallet(wallet_name)
+        if not wallet:
+            console.print(f"[red]Wallet {wallet_name} not found[/red]")
+            return
+
+        # Run the async function
+        asyncio.run(_lalai_async(wallet, wallet_name, port, peers, topic))
+
+    except Exception as e:
+        console.print(f"[red]Error in lalai: {str(e)}[/red]")
+
+async def _lalai_async(wallet, wallet_name: str, port: int, peers: Optional[str], topic: str):
+    """Async implementation of lalai command"""
+    try:
+        # Initialize peer set and message cache
+        peer_set: Set[str] = set()
+        message_cache: Dict[str, float] = {}
+        
+        if peers:
+            peer_set.update(peers.split(','))
+
+        # Generate node ID
+        node_id = hashlib.sha256(f"{wallet_name}:{port}".encode()).hexdigest()[:16]
+        
+        # Create web app for gossip protocol
+        app = web.Application()
+        routes = web.RouteTableDef()
+
+        @routes.post('/gossip')
+        async def handle_gossip(request):
+            try:
+                data = await request.json()
+                msg_id = data.get('id')
+                
+                # Check if message is already seen
+                if msg_id not in message_cache:
+                    message_cache[msg_id] = time.time()
+                    console.print(f"\n[blue]Received message from peer:[/blue]")
+                    console.print(data)
+                    
+                    # Propagate to other peers (gossip)
+                    asyncio.create_task(propagate_message(data, exclude_peer=str(request.remote)))
+                
+                return web.Response(text='OK')
+            except Exception as e:
+                return web.Response(text=str(e), status=500)
+
+        app.add_routes(routes)
+        
+        # Start the server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, 'localhost', port)
+        await site.start()
+        
+        console.print(f"[green]Node started with ID: {node_id}[/green]")
+        console.print(f"[green]Listening on port: {port}[/green]")
+        if peer_set:
+            console.print(f"[green]Connected to peers: {peer_set}[/green]")
+
+        async def propagate_message(message: dict, exclude_peer: Optional[str] = None):
+            """Propagate message to all peers except the sender"""
+            for peer in peer_set:
+                if exclude_peer and peer in exclude_peer:
+                    continue
+                    
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        await session.post(f"http://{peer}/gossip", json=message)
+                except Exception as e:
+                    console.print(f"[red]Failed to propagate to {peer}: {str(e)}[/red]")
+
+        async def broadcast_wallet_state():
+            """Periodically broadcast wallet state"""
+            while True:
+                try:
+                    # Create message with unique ID
+                    message = {
+                        'id': f"{node_id}:{random.randint(0, 1000000)}",
+                        'node_id': node_id,
+                        'wallet_name': wallet_name,
+                        'network': wallet.network,
+                        'balance': wallet.get_balance(),
+                        'timestamp': time.time(),
+                        'topic': topic
+                    }
+                    
+                    # Broadcast to all peers
+                    await propagate_message(message)
+                    console.print(f"\n[cyan]Broadcasting wallet state: {message}[/cyan]")
+                    
+                except Exception as e:
+                    console.print(f"[red]Error broadcasting state: {str(e)}[/red]")
+                
+                await asyncio.sleep(10)  # Broadcast every 10 seconds
+
+        # Start broadcasting task
+        broadcast_task = asyncio.create_task(broadcast_wallet_state())
+
+        # Handle graceful shutdown
+        def signal_handler():
+            broadcast_task.cancel()
+            asyncio.create_task(runner.cleanup())
+
+        # Register signal handlers
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
+
+        # Keep the node running
+        try:
+            while True:
+                cmd = input("\nEnter 'q' to quit, 'p' to print peers, or 'm' to send custom message: ")
+                if cmd.lower() == 'q':
+                    break
+                elif cmd.lower() == 'p':
+                    console.print(f"\n[yellow]Connected peers: {peer_set}[/yellow]")
+                elif cmd.lower() == 'm':
+                    msg = input("Enter message to broadcast: ")
+                    message = {
+                        'id': f"{node_id}:{random.randint(0, 1000000)}",
+                        'node_id': node_id,
+                        'type': 'custom',
+                        'content': msg,
+                        'timestamp': time.time(),
+                        'topic': topic
+                    }
+                    await propagate_message(message)
+                    console.print(f"[green]Message sent: {message}[/green]")
+                
+                await asyncio.sleep(1)
+        finally:
+            signal_handler()
+
+    except Exception as e:
+        console.print(f"[red]Error in lalai: {str(e)}[/red]")
+    finally:
+        # Cleanup
+        try:
+            await runner.cleanup()
+        except:
+            pass
+
+if __name__ == '__main__':
+    app() 
