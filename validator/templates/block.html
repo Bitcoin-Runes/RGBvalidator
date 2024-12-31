@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}Block Details{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Block Overview -->
+    <div class="bg-white rounded-lg shadow mb-8">
+        <div class="p-6 border-b">
+            <h1 class="text-2xl font-bold">Block #<span id="blockHeight">Loading...</span></h1>
+            <p class="text-gray-500 mt-2 font-mono" id="blockHash">Loading...</p>
+        </div>
+        <div class="p-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Basic Info -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Basic Information</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Timestamp</dt>
+                        <dd class="text-sm" id="blockTime">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Status</dt>
+                        <dd class="text-sm" id="blockStatus">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Size</dt>
+                        <dd class="text-sm" id="blockSize">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Weight</dt>
+                        <dd class="text-sm" id="blockWeight">Loading...</dd>
+                    </dl>
+                </div>
+                <!-- Technical Details -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Technical Details</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Version</dt>
+                        <dd class="text-sm font-mono" id="blockVersion">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Merkle Root</dt>
+                        <dd class="text-sm font-mono break-all" id="merkleRoot">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Bits</dt>
+                        <dd class="text-sm font-mono" id="blockBits">Loading...</dd>
+                        <dt class="text-sm text-gray-500">Nonce</dt>
+                        <dd class="text-sm font-mono" id="blockNonce">Loading...</dd>
+                    </dl>
+                </div>
+                <!-- Chain Info -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Chain Information</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Previous Block</dt>
+                        <dd class="text-sm font-mono break-all">
+                            <a href="#" id="prevBlock" class="text-blue-600 hover:text-blue-800">Loading...</a>
+                        </dd>
+                        <dt class="text-sm text-gray-500">Next Block</dt>
+                        <dd class="text-sm font-mono break-all">
+                            <a href="#" id="nextBlock" class="text-blue-600 hover:text-blue-800">Loading...</a>
+                        </dd>
+                        <dt class="text-sm text-gray-500">Confirmations</dt>
+                        <dd class="text-sm" id="confirmations">Loading...</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transactions -->
+    <div class="bg-white rounded-lg shadow">
+        <div class="p-6 border-b flex justify-between items-center">
+            <h2 class="text-xl font-bold">Transactions</h2>
+            <span class="text-gray-500" id="txCount">Loading...</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transaction ID</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Weight</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fee (sats)</th>
+                    </tr>
+                </thead>
+                <tbody id="transactionsTable" class="bg-white divide-y divide-gray-200">
+                    <tr>
+                        <td colspan="4" class="px-6 py-4 text-center">Loading transactions...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="p-4 border-t" id="paginationControls">
+            <div class="flex justify-between items-center">
+                <button id="prevPage" class="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100 disabled:opacity-50">
+                    Previous
+                </button>
+                <span id="pageInfo" class="text-sm text-gray-600">Page 1</span>
+                <button id="nextPage" class="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100 disabled:opacity-50">
+                    Next
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function formatTimestamp(timestamp) {
+    const date = new Date(timestamp * 1000);
+    if (isNaN(date.getTime())) {
+        return 'Invalid date';
+    }
+    return date.toLocaleString();
+}
+
+let currentPage = 1;
+const ITEMS_PER_PAGE = 25;
+let blockHash = '';
+
+async function loadBlockDetails() {
+    try {
+        // Get block hash from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        blockHash = urlParams.get('hash') || urlParams.get('height');
+        
+        if (!blockHash) {
+            throw new Error('No block hash or height provided');
+        }
+
+        const response = await fetch(`/api/explorer/block/${blockHash}`);
+        const block = await response.json();
+        
+        if (block.error) throw new Error(block.error);
+
+        // Update basic info
+        document.getElementById('blockHeight').textContent = block.height.toLocaleString();
+        document.getElementById('blockHash').textContent = block.hash;
+        document.getElementById('blockTime').textContent = formatTimestamp(block.timestamp);
+        document.getElementById('blockStatus').textContent = block.in_best_chain ? 'Confirmed' : 'Orphaned';
+        document.getElementById('blockSize').textContent = `${(block.size / 1024).toFixed(2)} KB`;
+        document.getElementById('blockWeight').textContent = `${(block.weight / 1024).toFixed(2)} KWU`;
+        
+        // Update technical details
+        document.getElementById('blockVersion').textContent = block.version;
+        document.getElementById('merkleRoot').textContent = block.merkle_root;
+        document.getElementById('blockBits').textContent = block.bits;
+        document.getElementById('blockNonce').textContent = block.nonce;
+        
+        // Update chain info
+        const prevBlock = document.getElementById('prevBlock');
+        const nextBlock = document.getElementById('nextBlock');
+        
+        if (block.prev_block) {
+            prevBlock.textContent = block.prev_block;
+            prevBlock.href = `?hash=${block.prev_block}`;
+        } else {
+            prevBlock.textContent = 'Genesis Block';
+            prevBlock.removeAttribute('href');
+        }
+        
+        if (block.next_block) {
+            nextBlock.textContent = block.next_block;
+            nextBlock.href = `?hash=${block.next_block}`;
+        } else {
+            nextBlock.textContent = 'None';
+            nextBlock.removeAttribute('href');
+        }
+
+        document.getElementById('txCount').textContent = `${block.tx_count.toLocaleString()} transactions`;
+        
+        // Load first page of transactions
+        await loadTransactions(1);
+    } catch (error) {
+        console.error('Error loading block details:', error);
+        alert('Error loading block details: ' + error.message);
+    }
+}
+
+async function loadTransactions(page) {
+    try {
+        const response = await fetch(`/api/explorer/block/${blockHash}/txs/${(page - 1) * ITEMS_PER_PAGE}`);
+        const data = await response.json();
+        
+        if (data.error) throw new Error(data.error);
+
+        const tableBody = document.getElementById('transactionsTable');
+        tableBody.innerHTML = data.map(tx => `
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4 whitespace-nowrap font-mono text-sm">
+                    <a href="/transaction?txid=${tx.txid}" class="text-blue-600 hover:text-blue-800">
+                        ${tx.txid}
+                    </a>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    ${tx.size.toLocaleString()} bytes
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    ${tx.weight.toLocaleString()} WU
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    ${tx.fee ? tx.fee.toLocaleString() : 'N/A'}
+                </td>
+            </tr>
+        `).join('');
+
+        // Update pagination
+        currentPage = page;
+        document.getElementById('pageInfo').textContent = `Page ${page}`;
+        document.getElementById('prevPage').disabled = page === 1;
+        // You might want to disable next button based on total tx count
+        document.getElementById('nextPage').disabled = data.length < ITEMS_PER_PAGE;
+    } catch (error) {
+        console.error('Error loading transactions:', error);
+        document.getElementById('transactionsTable').innerHTML = `
+            <tr>
+                <td colspan="4" class="px-6 py-4 text-center text-red-600">
+                    Error loading transactions: ${error.message}
+                </td>
+            </tr>
+        `;
+    }
+}
+
+// Initialize page
+document.addEventListener('DOMContentLoaded', function() {
+    loadBlockDetails();
+
+    // Setup pagination handlers
+    document.getElementById('prevPage').addEventListener('click', () => {
+        if (currentPage > 1) loadTransactions(currentPage - 1);
+    });
+
+    document.getElementById('nextPage').addEventListener('click', () => {
+        loadTransactions(currentPage + 1);
+    });
+});
+</script>
+{% endblock %} 

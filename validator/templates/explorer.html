@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Bitcoin Explorer{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Search Section -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold mb-4">Bitcoin Explorer</h1>
+        <div class="bg-white rounded-lg shadow p-6">
+            <form id="searchForm" class="flex gap-4">
+                <input type="text" id="searchQuery" 
+                       class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                       placeholder="Search by transaction ID, address, block hash, or block height">
+                <button type="submit" 
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    Search
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Latest Network Info -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-2">Latest Block</h3>
+            <div id="latestBlock" class="text-gray-600">Loading...</div>
+            <div id="blockTime" class="text-sm text-gray-500 mt-1"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-2">Network Hashrate</h3>
+            <div id="networkHashrate" class="text-gray-600">Loading...</div>
+            <div class="text-sm text-gray-500 mt-1">Estimated</div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-2">Mempool</h3>
+            <div id="mempoolSize" class="text-gray-600">Loading...</div>
+            <div id="mempoolBytes" class="text-sm text-gray-500 mt-1"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-2">Fees (sat/vB)</h3>
+            <div class="space-y-1">
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">High Priority:</span>
+                    <span id="highFee" class="text-gray-600">...</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Medium Priority:</span>
+                    <span id="mediumFee" class="text-gray-600">...</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-sm text-gray-500">Low Priority:</span>
+                    <span id="lowFee" class="text-gray-600">...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Latest Blocks -->
+    <div class="bg-white rounded-lg shadow mb-8">
+        <div class="p-6 border-b">
+            <h2 class="text-xl font-bold">Latest Blocks</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Height</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hash</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Transactions</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                    </tr>
+                </thead>
+                <tbody id="latestBlocksTable" class="bg-white divide-y divide-gray-200">
+                    <tr>
+                        <td colspan="5" class="px-6 py-4 text-center">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Search Results -->
+    <div id="searchResults" class="bg-white rounded-lg shadow hidden">
+        <div class="p-6 border-b">
+            <h2 class="text-xl font-bold">Search Results</h2>
+        </div>
+        <div id="searchResultsContent" class="p-6">
+            <!-- Results will be dynamically inserted here -->
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript for the explorer functionality -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize the page
+    updateNetworkInfo();
+    updateLatestBlocks();
+    setInterval(updateNetworkInfo, 30000); // Update every 30 seconds
+    setInterval(updateLatestBlocks, 30000);
+
+    // Handle search form submission
+    document.getElementById('searchForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const query = document.getElementById('searchQuery').value.trim();
+        if (query) {
+            performSearch(query);
+        }
+    });
+});
+
+function formatHashrate(hashrate) {
+    const units = ['H/s', 'KH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s', 'EH/s'];
+    let unitIndex = 0;
+    
+    while (hashrate >= 1000 && unitIndex < units.length - 1) {
+        hashrate /= 1000;
+        unitIndex++;
+    }
+    
+    return `${hashrate.toFixed(2)} ${units[unitIndex]}`;
+}
+
+function formatTimestamp(timestamp) {
+    // Handle both Unix timestamp in seconds and milliseconds
+    const date = new Date(timestamp * 1000);
+    if (isNaN(date.getTime())) {
+        return 'Invalid date';
+    }
+    return date.toLocaleString();
+}
+
+function updateNetworkInfo() {
+    Promise.all([
+        fetch('/api/explorer/network-info').then(r => r.json()),
+        fetch('/api/explorer/mempool').then(r => r.json())
+    ])
+    .then(([networkData, mempoolData]) => {
+        if (networkData.error) throw new Error(networkData.error);
+        if (mempoolData.error) throw new Error(mempoolData.error);
+
+        // Update latest block
+        document.getElementById('latestBlock').textContent = `#${networkData.height.toLocaleString()}`;
+        
+        // Update network hashrate
+        document.getElementById('networkHashrate').textContent = formatHashrate(networkData.hashrate);
+        
+        // Update mempool info
+        document.getElementById('mempoolSize').textContent = `${mempoolData.count.toLocaleString()} transactions`;
+        document.getElementById('mempoolBytes').textContent = `${(mempoolData.vsize / 1024 / 1024).toFixed(2)} MB`;
+        
+        // Update fee estimates
+        const feeEstimates = mempoolData.fee_estimates;
+        document.getElementById('highFee').textContent = Math.round(feeEstimates['2'] || 0);  // 2-block target
+        document.getElementById('mediumFee').textContent = Math.round(feeEstimates['6'] || 0);  // 6-block target
+        document.getElementById('lowFee').textContent = Math.round(feeEstimates['24'] || 0);  // 24-block target
+    })
+    .catch(error => {
+        console.error('Error updating network info:', error);
+    });
+}
+
+function updateLatestBlocks() {
+    fetch('/api/explorer/latest-blocks')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+            
+            const tableBody = document.getElementById('latestBlocksTable');
+            tableBody.innerHTML = data.blocks.map(block => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <a href="#" onclick="performSearch('${block.height}')" class="text-blue-600 hover:text-blue-800">
+                            ${block.height.toLocaleString()}
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap font-mono text-sm">
+                        <a href="#" onclick="performSearch('${block.hash}')" class="text-blue-600 hover:text-blue-800">
+                            ${block.hash}
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${formatTimestamp(block.timestamp)}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${block.tx_count.toLocaleString()}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${(block.size / 1024).toFixed(2)} KB
+                    </td>
+                </tr>
+            `).join('');
+
+            // Update latest block info
+            if (data.blocks.length > 0) {
+                const latestBlock = data.blocks[0];
+                document.getElementById('latestBlock').textContent = `#${latestBlock.height.toLocaleString()}`;
+                const timeDiff = Math.floor((Date.now() / 1000 - latestBlock.timestamp) / 60);
+                document.getElementById('blockTime').textContent = `${timeDiff} minutes ago`;
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching latest blocks:', error);
+            const tableBody = document.getElementById('latestBlocksTable');
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="px-6 py-4 text-center text-red-600">
+                        Error loading blocks: ${error.message}
+                    </td>
+                </tr>
+            `;
+        });
+}
+
+function performSearch(query) {
+    const resultsDiv = document.getElementById('searchResults');
+    const resultsContent = document.getElementById('searchResultsContent');
+    resultsDiv.classList.remove('hidden');
+    resultsContent.innerHTML = '<div class="text-center">Searching...</div>';
+
+    fetch('/api/explorer/search', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: query })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) throw new Error(data.error);
+        
+        let html = '';
+        switch (data.type) {
+            case 'transaction':
+                html = renderTransactionDetails(data.data);
+                break;
+            case 'block':
+                html = renderBlockDetails(data.data);
+                break;
+            case 'address':
+                html = renderAddressDetails(data.data);
+                break;
+            default:
+                html = '<div class="text-red-600">Unknown result type</div>';
+        }
+        resultsContent.innerHTML = html;
+    })
+    .catch(error => {
+        resultsContent.innerHTML = `
+            <div class="bg-red-50 border-l-4 border-red-400 p-4">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
+                    <div class="ml-3">
+                        <p class="text-sm text-red-700">
+                            ${error.message}
+                        </p>
+                    </div>
+                </div>
+            </div>`;
+    });
+}
+
+function renderTransactionDetails(tx) {
+    const feeRate = tx.size > 0 ? (tx.fee / tx.size).toFixed(2) : '0.00';
+    return `
+        <div class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Transaction Details</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Transaction ID</dt>
+                        <dd class="text-sm font-mono break-all">${tx.txid}</dd>
+                        <dt class="text-sm text-gray-500">Size</dt>
+                        <dd class="text-sm">${tx.size.toLocaleString()} bytes</dd>
+                        <dt class="text-sm text-gray-500">Weight</dt>
+                        <dd class="text-sm">${tx.weight.toLocaleString()} WU</dd>
+                        <dt class="text-sm text-gray-500">Fee</dt>
+                        <dd class="text-sm">${tx.fee.toLocaleString()} sats (${feeRate} sat/vB)</dd>
+                    </dl>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Status</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Confirmations</dt>
+                        <dd class="text-sm">${tx.confirmations || 'Unconfirmed'}</dd>
+                        <dt class="text-sm text-gray-500">Block Height</dt>
+                        <dd class="text-sm">${tx.blockheight || 'Pending'}</dd>
+                        <dt class="text-sm text-gray-500">Time</dt>
+                        <dd class="text-sm">${formatTimestamp(tx.time)}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>`;
+}
+
+function renderBlockDetails(block) {
+    return `
+        <div class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Block Details</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Height</dt>
+                        <dd class="text-sm">${block.height.toLocaleString()}</dd>
+                        <dt class="text-sm text-gray-500">Hash</dt>
+                        <dd class="text-sm font-mono break-all">${block.hash}</dd>
+                        <dt class="text-sm text-gray-500">Time</dt>
+                        <dd class="text-sm">${formatTimestamp(block.timestamp)}</dd>
+                    </dl>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Statistics</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Transactions</dt>
+                        <dd class="text-sm">${block.tx_count.toLocaleString()}</dd>
+                        <dt class="text-sm text-gray-500">Size</dt>
+                        <dd class="text-sm">${(block.size / 1024).toFixed(2)} KB</dd>
+                        <dt class="text-sm text-gray-500">Weight</dt>
+                        <dd class="text-sm">${(block.weight / 1024).toFixed(2)} KWU</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>`;
+}
+
+function renderAddressDetails(address) {
+    return `
+        <div class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Address Details</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Address</dt>
+                        <dd class="text-sm font-mono break-all">${address.address}</dd>
+                        <dt class="text-sm text-gray-500">Total Received</dt>
+                        <dd class="text-sm">${(address.total_received / 100000000).toFixed(8)} BTC</dd>
+                        <dt class="text-sm text-gray-500">Total Sent</dt>
+                        <dd class="text-sm">${(address.total_sent / 100000000).toFixed(8)} BTC</dd>
+                    </dl>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold mb-2">Balance</h3>
+                    <dl class="space-y-2">
+                        <dt class="text-sm text-gray-500">Final Balance</dt>
+                        <dd class="text-sm">${(address.balance / 100000000).toFixed(8)} BTC</dd>
+                        <dt class="text-sm text-gray-500">Transactions</dt>
+                        <dd class="text-sm">${address.tx_count.toLocaleString()}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>`;
+}
+</script>
+{% endblock %} 

@@ -1,10 +1,14 @@
 import sqlite3
 import json
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 from decimal import Decimal
 from .schemas import WalletInfo, UTXO, Transaction
 import logging
+from .electrum import ElectrumClient
+import requests
+import time
+import random
 
 class Database:
     def __init__(self, db_path: str = "data/wallet.db"):
@@ -318,3 +322,226 @@ class Database:
                 conn.rollback()
                 logging.error(f"Error deleting wallet data: {str(e)}")
                 raise ValueError(f"Failed to delete wallet data: {str(e)}") 
+
+class BitcoinNodeConnector:
+    def __init__(self):
+        self.api_base_url = "https://blockstream.info/api"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 Bitcoin Explorer',
+            'Accept': 'application/json'
+        })
+        self._setup_logging()
+
+    def _setup_logging(self):
+        """Setup logging configuration"""
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+
+    def _make_request(self, endpoint: str, params: dict = None) -> Any:
+        """Make HTTP request to the API"""
+        try:
+            url = f"{self.api_base_url}/{endpoint}"
+            response = self.session.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            # Handle empty responses (some endpoints return raw data)
+            if not response.content:
+                return None
+                
+            # Handle non-JSON responses (like hex data)
+            if response.headers.get('content-type', '').startswith('application/json'):
+                return response.json()
+            return response.text
+            
+        except requests.RequestException as e:
+            self.logger.error(f"API request failed: {str(e)}")
+            raise
+
+    def get_transaction_details(self, txid: str) -> Dict[str, Any]:
+        """Get detailed information about a transaction"""
+        try:
+            # Get transaction data
+            tx_data = self._make_request(f"tx/{txid}")
+            
+            # Get transaction status
+            tx_status = self._make_request(f"tx/{txid}/status")
+            
+            # Get transaction hex for additional details
+            tx_hex = self._make_request(f"tx/{txid}/hex")
+            
+            return {
+                'txid': txid,
+                'version': tx_data.get('version'),
+                'size': tx_data.get('size', 0),
+                'vsize': tx_data.get('vsize', 0),
+                'weight': tx_data.get('weight', 0),
+                'locktime': tx_data.get('locktime'),
+                'time': tx_status.get('block_time', int(time.time())),
+                'confirmations': tx_status.get('confirmed', False),
+                'blockheight': tx_status.get('block_height'),
+                'blockhash': tx_status.get('block_hash'),
+                'fee': tx_data.get('fee', 0),
+                'inputs': tx_data.get('vin', []),
+                'outputs': tx_data.get('vout', []),
+                'hex': tx_hex
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting transaction details: {str(e)}")
+            raise
+
+    def get_block_details(self, block_hash: str) -> Dict[str, Any]:
+        """Get detailed information about a block"""
+        try:
+            # Get block data
+            block_data = self._make_request(f"block/{block_hash}")
+            
+            # Get block status
+            block_status = self._make_request(f"block/{block_hash}/status")
+            
+            # Get block header
+            block_header = self._make_request(f"block/{block_hash}/header")
+            
+            return {
+                'hash': block_hash,
+                'height': block_data.get('height', 0),
+                'version': block_data.get('version'),
+                'timestamp': block_data.get('timestamp', 0),
+                'bits': block_data.get('bits'),
+                'nonce': block_data.get('nonce'),
+                'merkle_root': block_data.get('merkle_root'),
+                'tx_count': block_data.get('tx_count', 0),
+                'size': block_data.get('size', 0),
+                'weight': block_data.get('weight', 0),
+                'prev_block': block_data.get('previousblockhash'),
+                'next_block': block_status.get('next_best'),
+                'header': block_header,
+                'in_best_chain': block_status.get('in_best_chain', True)
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting block details: {str(e)}")
+            raise
+
+    def get_block_by_height(self, height: int) -> Dict[str, Any]:
+        """Get block details by height"""
+        try:
+            # Get block hash first
+            block_hash = self._make_request(f"block-height/{height}")
+            if not block_hash:
+                raise Exception(f"Block at height {height} not found")
+            
+            # Then get block details
+            return self.get_block_details(block_hash)
+        except Exception as e:
+            self.logger.error(f"Error getting block by height: {str(e)}")
+            raise
+
+    def get_block_txids(self, block_hash: str, start_index: int = 0) -> List[str]:
+        """Get transaction IDs in a block"""
+        try:
+            return self._make_request(f"block/{block_hash}/txids")
+        except Exception as e:
+            self.logger.error(f"Error getting block transactions: {str(e)}")
+            raise
+
+    def get_block_txs(self, block_hash: str, start_index: int = 0) -> List[Dict[str, Any]]:
+        """Get transactions in a block (25 at a time)"""
+        try:
+            endpoint = f"block/{block_hash}/txs/{start_index}"
+            return self._make_request(endpoint)
+        except Exception as e:
+            self.logger.error(f"Error getting block transactions: {str(e)}")
+            raise
+
+    def get_latest_blocks(self, start_height: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get the latest blocks (limited to 5 blocks to avoid rate limiting)"""
+        try:
+            # Get blocks
+            endpoint = "blocks" + (f"/{start_height}" if start_height else "")
+            blocks_data = self._make_request(endpoint)
+            
+            # Limit to 5 blocks
+            blocks_data = blocks_data[:5]
+            
+            blocks = []
+            for block in blocks_data:
+                try:
+                    # Add delay between requests to avoid rate limiting
+                    time.sleep(0.5)  # 500ms delay between requests
+                    block_details = self.get_block_details(block['id'])
+                    blocks.append(block_details)
+                except Exception as e:
+                    self.logger.error(f"Error getting block details: {str(e)}")
+                    continue
+            
+            return {'blocks': blocks}
+        except Exception as e:
+            self.logger.error(f"Error getting latest blocks: {str(e)}")
+            raise
+
+    def get_mempool_info(self) -> Dict[str, Any]:
+        """Get information about the mempool"""
+        try:
+            mempool_data = self._make_request("mempool")
+            fee_data = self._make_request("fee-estimates")
+            
+            return {
+                'count': mempool_data.get('count', 0),
+                'vsize': mempool_data.get('vsize', 0),
+                'total_fee': mempool_data.get('total_fee', 0),
+                'fee_histogram': mempool_data.get('fee_histogram', []),
+                'fee_estimates': fee_data
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting mempool info: {str(e)}")
+            raise
+
+    def get_mempool_txids(self) -> List[str]:
+        """Get all transaction IDs in the mempool"""
+        try:
+            return self._make_request("mempool/txids")
+        except Exception as e:
+            self.logger.error(f"Error getting mempool txids: {str(e)}")
+            raise
+
+    def get_mempool_recent(self) -> List[Dict[str, Any]]:
+        """Get recent mempool transactions"""
+        try:
+            return self._make_request("mempool/recent")
+        except Exception as e:
+            self.logger.error(f"Error getting recent mempool transactions: {str(e)}")
+            raise
+
+    def get_network_info(self) -> Dict[str, Any]:
+        """Get network information"""
+        try:
+            # Get latest block height
+            tip_height = self._make_request("blocks/tip/height")
+            
+            # Get latest block hash
+            tip_hash = self._make_request("blocks/tip/hash")
+            
+            # Get block header only instead of full details
+            block_header = self._make_request(f"block/{tip_hash}/header")
+            
+            # Get mempool info
+            mempool = self.get_mempool_info()
+            
+            # Calculate hashrate (rough estimate based on difficulty)
+            # Extract difficulty from block header
+            difficulty_bits = int(block_header[-8:], 16)  # Last 4 bytes of header contain difficulty bits
+            hashrate = difficulty_bits * 2**32 / 600  # Average block time is 600 seconds
+            
+            return {
+                'height': int(tip_height),
+                'best_block_hash': tip_hash,
+                'difficulty': difficulty_bits,
+                'hashrate': hashrate,
+                'mempool_size': mempool['count'],
+                'mempool_bytes': mempool['vsize'],
+                'mempool_fee': mempool['total_fee'],
+                'fee_estimates': mempool['fee_estimates']
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting network info: {str(e)}")
+            raise 

@@ -329,5 +329,28 @@
             }
         }
     </script>
+
+    <div class="bitcoin-connection">
+        <h3>Bitcoin Network Connection</h3>
+        <div id="connection-status">Not connected</div>
+        <button onclick="connectToNode()">Connect to Bitcoin Network</button>
+    </div>
+
+    <script>
+    async function connectToNode() {
+        try {
+            const response = await fetch('/api/connect', {
+                method: 'POST'
+            });
+            const data = await response.json();
+            
+            document.getElementById('connection-status').textContent = 
+                data.success ? 'Connected' : 'Connection failed';
+        } catch (error) {
+            console.error('Failed to connect:', error);
+            document.getElementById('connection-status').textContent = 'Connection failed';
+        }
+    }
+    </script>
 </div>
 {% endblock %} 

@@ -13,6 +13,7 @@ from collections import defaultdict
 from .wallet import wallet_manager, WalletManager
 from . import app, WALLETS_DIR  # Import app from __init__.py
 import tempfile
+from .database import BitcoinNodeConnector
 
 # Lock for balance scanning
 balance_scan_lock = threading.Lock()
@@ -20,6 +21,9 @@ active_scan = False
 
 # Store active DHT nodes
 active_nodes = {}
+
+# Initialize the Bitcoin connector
+bitcoin_connector = BitcoinNodeConnector()
 
 def abort_active_scan():
     """Helper function to abort any active scan"""
@@ -629,3 +633,140 @@ def export_wallet(name):
     except Exception as e:
         flash(f"Error exporting wallet: {str(e)}", "error")
         return redirect(url_for('wallet_detail', name=name, tab='export')) 
+
+@app.route('/api/connect', methods=['POST'])
+def connect_node():
+    success = bitcoin_connector.connect_to_electrum()
+    return jsonify({"success": success})
+
+@app.route('/api/transaction/<txid>')
+def get_transaction(txid):
+    try:
+        tx_details = bitcoin_connector.get_transaction_details(txid)
+        return jsonify(tx_details)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500 
+
+@app.route('/explorer')
+def explorer():
+    """Bitcoin explorer page"""
+    try:
+        # Test connection by getting network info
+        bitcoin_connector.get_network_info()
+        return render_template('explorer.html')
+    except Exception as e:
+        flash(f"Error connecting to Bitcoin network: {str(e)}", "error")
+        return render_template('explorer.html')
+
+@app.route('/api/explorer/network-info')
+def get_bitcoin_network_info():
+    """Get Bitcoin network information"""
+    try:
+        network_info = bitcoin_connector.get_network_info()
+        return jsonify(network_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/explorer/mempool')
+def get_mempool_info():
+    """Get mempool information"""
+    try:
+        mempool_info = bitcoin_connector.get_mempool_info()
+        return jsonify(mempool_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/explorer/latest-blocks')
+def get_latest_blocks():
+    """Get latest blocks"""
+    try:
+        blocks = bitcoin_connector.get_latest_blocks()
+        return jsonify(blocks)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/explorer/block/<block_hash>')
+def get_block_info(block_hash):
+    """Get block information"""
+    try:
+        block_info = bitcoin_connector.get_block_details(block_hash)
+        return jsonify(block_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/explorer/tx/<txid>')
+def get_transaction_info(txid):
+    """Get transaction information"""
+    try:
+        tx_info = bitcoin_connector.get_transaction_details(txid)
+        return jsonify(tx_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/explorer/search', methods=['POST'])
+def search_blockchain():
+    """Search for blocks, transactions, or addresses"""
+    try:
+        query = request.json.get('query', '').strip()
+        if not query:
+            return jsonify({'error': 'Empty search query'}), 400
+
+        # Try to get transaction details
+        try:
+            tx_info = bitcoin_connector.get_transaction_details(query)
+            return jsonify({'type': 'transaction', 'data': tx_info})
+        except:
+            pass
+
+        # Try to get block details (by hash or height)
+        try:
+            # Try as block hash first
+            block_info = bitcoin_connector.get_block_details(query)
+            return jsonify({'type': 'block', 'data': block_info})
+        except:
+            # Try as block height
+            try:
+                if query.isdigit():
+                    block_info = bitcoin_connector.get_block_by_height(int(query))
+                    return jsonify({'type': 'block', 'data': block_info})
+            except:
+                pass
+
+        return jsonify({'error': 'No results found'}), 404
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500 
+
+@app.route('/block')
+def block_detail():
+    """Block details page"""
+    try:
+        return render_template('block.html')
+    except Exception as e:
+        flash(f"Error loading block details: {str(e)}", "error")
+        return render_template('block.html')
+
+@app.route('/transaction')
+def transaction_detail():
+    """Transaction details page"""
+    try:
+        return render_template('transaction.html')
+    except Exception as e:
+        flash(f"Error loading transaction details: {str(e)}", "error")
+        return render_template('transaction.html')
+
+@app.route('/api/explorer/block/<identifier>/txs/<int:start_index>')
+def get_block_transactions(identifier, start_index):
+    """Get transactions in a block with pagination"""
+    try:
+        # If identifier is a height, get the block hash first
+        if identifier.isdigit():
+            block = bitcoin_connector.get_block_by_height(int(identifier))
+            block_hash = block['hash']
+        else:
+            block_hash = identifier
+
+        transactions = bitcoin_connector.get_block_txs(block_hash, start_index)
+        return jsonify(transactions)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500 
